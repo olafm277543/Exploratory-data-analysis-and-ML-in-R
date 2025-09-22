@@ -1,0 +1,434 @@
+---
+title: "Raport 2"
+subtitle: "Eksploracja danych"
+author: "Olaf Masłowski, album 277543"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage[OT4]{polski}
+   - \usepackage[utf8]{inputenc}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+output: 
+  pdf_document:
+    toc: true
+    fig_caption: yes
+    fig_width: 5 
+    fig_height: 4 
+    number_sections: true
+fontsize: 12pt 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(arules)
+library(e1071)
+library(xtable)
+library(plot3D)
+library(titanic)
+library(factoextra)
+library(cluster)
+library(patchwork)
+library(corrplot)
+```
+\newpage
+# Opis zagadnienia
+Będziemy analizowali dane Iris zawierające pomiary dotyczące trzech gatunków irysów. W pierwszej części wykorzystamy przedziałowanie, aby rozdzielić dane na trzy kategorie (analogicznie do rzeczywistych etykietek), w drugiej zastosujemy dwie metody redukcji danych - PCA i MDS.
+\newpage
+
+# Zadanie 1 - dyskretyzacja
+
+## Analiza opisowa
+
+Zaczniemy od zbadania podstawowych właściwości danych.
+
+```{r analiza opisowa, echo=FALSE, results='asis', fig.height=8, fig.width=7, fig.cap=c("Zestawienie wykresów pudełkowych dla poszczególnych gatunków i całości","Zestawienie wykresów różnych rodzajów")}
+data(iris)
+dane <- iris
+dane2 <- dane %>% mutate(Species = "wszystkie")
+dane3 <-  bind_rows(dane,dane2)
+#str(dane)
+
+# Zad 1
+
+# Wkaźniki
+
+wskazniki <- function(X, nazwa="") {
+  if (is.numeric(X)) {
+    wynik <- c(min(X),quantile(X,0.25), median(X), mean(X), quantile(X,0.75), max(X), var(X), sd(X), IQR(X))
+    names(wynik) <- c("min", "Q1", "median", "mean", "Q3", "max", "var", "sd", "IQR")
+    return(wynik)
+  } else {
+    wynik <- table(X)
+    return(wynik)
+  }
+}
+
+tabelki <- lapply(1:dim(dane)[2],
+                  function(x) wskazniki(dane[[x]],
+                  nazwa=paste0("wykres ",as.character(x),": ",colnames(dane)[x])))
+
+# Wykresy
+
+boxplot_sl <- ggplot(dane3, aes(x = Species, y=Sepal.Length, fill=Species)) + geom_boxplot()
+boxplot_sw <- ggplot(dane3, aes(x = Species, y=Sepal.Width, fill=Species)) + geom_boxplot() + guides(fill="none")
+boxplot_pl <- ggplot(dane3, aes(x = Species, y=Petal.Length, fill=Species)) + geom_boxplot() + guides(fill="none")
+boxplot_pw <- ggplot(dane3, aes(x = Species, y=Petal.Width, fill=Species)) + geom_boxplot() + guides(fill="none")
+hist_sl <- ggplot(dane, aes(x=Sepal.Length, fill=Species)) + geom_histogram()
+hist_sw <- ggplot(dane, aes(x=Sepal.Width, fill=Species)) + geom_histogram()
+hist_pl <- ggplot(dane, aes(x = Petal.Length, fill=Species)) + geom_histogram()
+hist_pw <- ggplot(dane, aes(x = Petal.Width, fill=Species)) + geom_histogram()
+
+boxplot_sl / boxplot_sw / boxplot_pl / boxplot_pw
+
+pary <- ggpairs(dane, aes(col=Species),lower=list(combo="facethist", bins=5)) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) # Za mającą największą wartość dyskryminacyjną uważam Petal.Length, najmniejszą Sepal.Width
+pary
+```
+
+```{r analiza opisowa2,echo=FALSE, results='asis', fig.cap="Wykres rozrzutu dla danych",fig.cap="Wykresy rozrzutu zmiennych Petal Length i Sepal Width"}
+x <- dane[,"Petal.Length"]
+y <- dane[,"Sepal.Width"]
+z <- runif(length(x))
+
+# Wykresy
+par(mfrow=c(1,2))
+plot(x,z,xlab="Petal length", ylab="Liczba z rozkładu U(0,1)")
+grid()
+plot(y,z,xlab="Sepal width", ylab="Liczba z rozkładu U(0,1)")
+grid()
+```
+
+Na powyższych wykresach możemy zauważyć, że największą zdolność dyskryminacyjną ma cecha Petal.Length. Szczególnie wyraźnie oddzielony jest gatunek setosa od pozostałych dwóch. Najgorzej pod tym względem radzi sobie cecha Sepal.Width (patrz rysunek 2, wykres na pozycji (2,2))
+
+## Dyskretyzacja
+
+```{r dyskretyzacja,results='asis'}
+x.equal.freq <- discretize(x, breaks=3,method = "frequency",labels = c("small","medium", "large"))
+y.equal.freq <- discretize(y, breaks=3,method = "frequency",labels = c("small","medium", "large"))
+
+x.equal.width <- discretize(x,method="interval", breaks=3,labels = c("small","medium", "large"))
+y.equal.width <- discretize(y,method="interval", breaks=3,labels = c("small","medium", "large"))
+
+x.k <- discretize(x, method = "cluster", breaks = 3,labels = c("small","medium", "large"))
+y.k <- discretize(y, method = "cluster", breaks = 3,labels = c("small","medium", "large"))
+
+x.user <- discretize(x, method = "fixed", 
+                          breaks = c(-Inf, 2, 5, Inf), labels = c("small","medium", "large"))
+y.user <- discretize(y, method = "fixed", 
+                          breaks = c(-Inf, 2.75, 3.25, Inf), labels = c("small","medium", "large"))
+```
+
+Powyżej wykonywana jest dyskretyzacja według kolejno: równej częstości, równej szerokości, algorytmu k-średnich i przedziałów zadanych przeze mnie.
+
+```{r dyskretyzacja wykresy, results='asis',echo=FALSE,fig.height=7,fig.width=7, fig.cap="Porównanie metod dyskretyzacji dla zmiennych o najlepszej i najgorszej zdolności dyskryminacyjnej"}
+breaks.x.equal.freq <- attributes(x.equal.freq)$"discretized:breaks"
+breaks.y.equal.freq <- attributes(y.equal.freq)$"discretized:breaks"
+breaks.x.equal.width <- attributes(x.equal.width)$"discretized:breaks"
+breaks.y.equal.width <- attributes(y.equal.width)$"discretized:breaks"
+breaks.x.k <- attributes(x.k)$"discretized:breaks"
+breaks.y.k <- attributes(y.k)$"discretized:breaks"
+breaks.x.user <- attributes(x.user)$"discretized:breaks"
+breaks.y.user <- attributes(y.user)$"discretized:breaks"
+
+# Histogramy z zaznaczonymi krańcami przedziałów
+par(mfrow=c(2,1))
+hist(x, breaks=10,main="Porównanie metod dyskretyzacji", col="turquoise",xlab="Petal.Length")
+abline(v=breaks.x.equal.freq, col = "red",lwd=5)
+abline(v=breaks.x.equal.width, col = "blue",lwd=4)
+abline(v=breaks.x.k, col = "yellow",lwd=3)
+abline(v=breaks.x.user, col = "magenta",lwd=2)
+legend("topright", c("Equal frequency", "Equal width", "k-means", "user"),
+       fill=c("red","blue","yellow", "magenta"),cex=0.8, bg="azure")
+
+hist(y, breaks=10,col="turquoise",xlab="Sepal.Width", main="")
+abline(v=breaks.y.equal.freq, col = "red",lwd=5)
+abline(v=breaks.y.equal.width, col = "blue",lwd=4)
+abline(v=breaks.y.k, col = "yellow",lwd=3)
+abline(v=breaks.y.user, col = "magenta",lwd=2)
+legend("topright", c("Equal frequency", "Equal width", "k-means", "user"),
+       fill=c("red","blue","yellow","magenta"), cex=0.8,bg="azure")
+
+
+plot(x,z, col=iris$Species,
+     main = "Porównanie metod dyskretyzacji z rzeczywistością",
+     ylim=c(-0.2,2),ylab="Liczba z rozkładu U(0,1)",xlab="Petal.Length")
+abline(v=breaks.x.equal.freq, col = "red",lwd=4)
+abline(v=breaks.x.equal.width, col = "blue",lwd=3)
+abline(v=breaks.x.k, col = "yellow",lwd=2)
+abline(v=breaks.x.user, col = "magenta",lwd=2)
+legend("topright", c("Equal frequency", "Equal width", "k-means", "user"),
+       fill=c("red","blue","yellow", "magenta"), bg="azure",cex=0.7)
+legend("topleft",levels(dane$Species),col=1:3, pch=21, bg="azure", cex=0.8)
+
+plot(y,z, col=iris$Species,
+     ylim=c(-0.2,2),ylab="Liczba z rozkładu U(0,1)", xlab="Sepal.Width")
+abline(v=breaks.y.equal.freq, col = "red",lwd=4)
+abline(v=breaks.y.equal.width, col = "blue",lwd=3)
+abline(v=breaks.y.k, col = "yellow",lwd=2)
+abline(v=breaks.y.user, col = "magenta",lwd=2)
+legend("topright", c("Equal frequency", "Equal width", "k-means", "user"),
+       fill=c("red","blue","yellow", "magenta"), bg="azure",cex=0.7)
+legend("topleft",levels(dane$Species),col=1:3, pch=21, bg="azure", cex=0.8)
+par(mfrow=c(1,1))
+
+```
+
+## Ocena skuteczności
+
+```{r jakość dyskretyzacji, echo = FALSE, results='asis',fig.height=8,fig.width=7,fig.cap=c("Porównanie skuteczności algorytmów - część 1","Porównanie skuteczności algorytmów - część 2")}
+# Tabele
+
+tab.x.eq.fr <- table(x.equal.freq, dane$Species)
+tab.y.eq.fr <- table(y.equal.freq, dane$Species)
+
+tab.x.eq.w <- table(x.equal.width, dane$Species)
+tab.y.eq.w <- table(y.equal.width, dane$Species)
+
+tab.x.k <- table(x.k, dane$Species)
+tab.y.k <- table(y.k, dane$Species)
+
+tab.x.user <- table(x.user, dane$Species)
+tab.y.user <- table(y.user, dane$Species)
+
+# Skuteczności
+par(mfrow=c(2,2))
+plot(iris$Species~x.equal.freq,col=1:3,
+     main = c("Skuteczność equal frequency", "Petal.Length"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+plot(iris$Species~y.equal.freq,col=1:3,
+     main = c("Skuteczność equal frequency", "Sepal.Width"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~x.equal.width,col=1:3,
+     main = c("Skuteczność equal width", "Petal.Length"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~y.equal.width,col=1:3,
+     main = c("Skuteczność equal width", "Sepal.Width"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~x.k, col=1:3,
+     main = c("Skuteczność k-means", "Petal.Length"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~y.k, col=1:3,
+     main = c("Skuteczność k-means", "Sepal.width"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~x.user, col=1:3,
+     main = c("Skuteczność k-means", "Petal.Length"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+plot(iris$Species~y.user, col=1:3,
+     main = c("Skuteczność user", "Sepal.Width"))
+legend("top",levels(dane$Species),fill=3:1, bg="azure", cex=0.6)
+
+# Wyznaczanie skuteczności
+
+skutecznosc.x.eq.fr <- compareMatchedClasses(iris$Species, x.equal.freq)$diag[[1,1]]
+skutecznosc.x.eq.w <- compareMatchedClasses(iris$Species, x.equal.width)$diag[[1,1]]
+skutecznosc.x.k <- compareMatchedClasses(iris$Species, x.k)$diag[[1,1]]
+skutecznosc.x.user <- compareMatchedClasses(iris$Species, x.user)$diag[[1,1]]
+
+skutecznosc.y.eq.fr <- compareMatchedClasses(iris$Species, y.equal.freq)$diag[[1,1]]
+skutecznosc.y.eq.w <- compareMatchedClasses(iris$Species, y.equal.width)$diag[[1,1]]
+skutecznosc.y.k <- compareMatchedClasses(iris$Species, y.k)$diag[[1,1]]
+skutecznosc.y.user <- compareMatchedClasses(iris$Species, y.user)$diag[[1,1]]
+```
+
+```{r tabele, results='asis',echo=FALSE}
+# Zestawienie skuteczności dla danych metod i cech
+
+df <- data.frame(
+  zmienna = c("Petal.Length","Sepal.Width"),
+  equal.frequency = c(skutecznosc.x.eq.fr, skutecznosc.y.eq.fr),
+  equal.width = c(skutecznosc.x.eq.w,skutecznosc.y.eq.w),
+  k.means = c(skutecznosc.x.k,skutecznosc.y.k),
+  user = c(skutecznosc.x.user,skutecznosc.y.user))
+
+tab1 <- xtable( as.matrix(tab.x.eq.fr), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Petal.Length - equal frequency", label = "tabela1")
+tab2 <- xtable( as.matrix(tab.y.eq.fr), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Sepal.Width - equal frequency", label = "tabela2")
+tab3 <- xtable( as.matrix(tab.x.eq.w), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Petal.Length - equal width", label = "tabela3")
+tab4 <- xtable( as.matrix(tab.y.eq.w), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Sepal.Width - equal width", label = "tabela4")
+tab5 <- xtable( as.matrix(tab.x.k), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Petal.Length - k-means", label = "tabela5")
+tab6 <- xtable( as.matrix(tab.y.k), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Sepal.Width - k-means", label = "tabela6")
+tab7 <- xtable( as.matrix(tab.x.user), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Petal.Length - user", label = "tabela7")
+tab8 <- xtable( as.matrix(tab.y.user), digits = 3, row.names = TRUE, caption = "Macierz pomyłek - Sepal.Width - user", label = "tabela8")
+tab9 <- xtable(as.matrix(df), digits = 3, row.names=TRUE, caption="Zestawienie skuteczności dla danych algorytmów i cech",label="tabela9")
+# Próbowałem umieszczać po dwie tabele w rzędzie, ale bezskutecznie
+print(tab1, type = "latex", table.placement = "H", comment=FALSE)
+print(tab2, type = "latex", table.placement = "H", comment=FALSE)
+print(tab3, type = "latex", table.placement = "H", comment=FALSE)
+print(tab4, type = "latex", table.placement = "H", comment=FALSE)
+print(tab5, type = "latex", table.placement = "H", comment=FALSE)
+print(tab6, type = "latex", table.placement = "H", comment=FALSE)
+print(tab7, type = "latex", table.placement = "H", comment=FALSE)
+print(tab8, type = "latex", table.placement = "H", comment=FALSE)
+print(tab9, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Jak widzimy dyskretyzacja jest zdecydowanie skuteczniejsza dla danych o większej zdolności dyskryminacyjnej. Same algorytmy wykazały się podobną skutecznością z najlepszymi rezultatami dla metody equal.frequency, co wynika przede wszystkim z faktu, że w naszych danych kategorie mają równą liczebność. Dobre rezultaty dało także manualne ustalenie przedziałów posiłkując się wykresami.
+
+\newpage
+
+# Zadanie 2 - redukcja wymiarów - PCA
+
+Poniżej zastosujemy algorytm Principal Component Analysis do danych oceniających jakość życia w różnych miastach. 17 kategorii zostało ocenionych w skali 0-10.
+
+```{r PCA czy standaryzowac, results='asis',echo=FALSE,fig.height=7,fig.width=7,fig.cap="Wykresy pudełkowe poszczególnych kategorii ocen"}
+dane <- read.csv("uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+#str(dane)
+dane.ilosciowe <- dane[,5:dim(dane)[[2]]]
+#sum(is.na(dane.ilosciowe))
+#head(dane.ilosciowe)
+par(mar=c(10,4,4,4))
+boxplot(dane.ilosciowe,las = 2, main="Wykresy pudełkowe zmiennych z uaScores")
+# Wariancje cech nie różnią się drastycznie. Nie korzystałbym ze standaryzacji
+
+par(mar=c(4,4,4,4))
+```
+
+Wariancje nie różnią się drastycznie, a oceny były przyznawane w tej samej skali, zatem moim zdaniem standaryzacja nie jest konieczna. Zostaną zamieszczone wykresy dla danych po standaryzacji, jednak uwaga skup się na oryginalnych danych.
+
+```{r PCA, results='asis', echo=FALSE,fig.width=8, fig.height=4, fig.cap = c("Wariancje składowych głównych po standaryzacji", "Wykresy pudełkowe poszczególnych składowych po standaryzacji","Wariancje składowych głównych bez standaryzacji","Wykresy pudełkowe poszczególnych składowych bez standaryzacji","Wykres osuwiskowy (scree plot) dla PCA po standaryzacji","Wykres osuwiskowy (scree plot) dla PCA bez standaryzacji","Wykres rozrzutu z podziałem na kontynenty dla PCA1 i PCA2 bez standaryzacji","Wykres rozrzutu 3D dla PCA1, PCA2 i PCA3 bez standaryzacji","Dwuwykres (biplot) dla PCA bez standaryzacji","Dwuwykres (biplot) dla PCA po standaryzacji","Wykres rozrzutu z podziałem na kontynenty dla PCA1 i PCA2 po standaryzacji", "Korelacja zmiennych i dwóch pierwszych składowych dla danych bez standaryzacji", "Macierz korelacji - dane bez standaryzacji")}
+# c)
+pca <- prcomp(dane.ilosciowe, center = TRUE, scale = TRUE, retx = TRUE)
+pca.no.stand <- prcomp(dane.ilosciowe, center = FALSE, scale = FALSE, retx = TRUE)
+pca.loadings <- as.data.frame(pca.no.stand[2])
+wklady <- pca.loadings[which(abs(pca.loadings[,1]) >= 0.8*max(abs(pca.loadings[,1])) | 
+                     abs(pca.loadings[,2]) >= 0.8*max(abs(pca.loadings[,2])) |
+                     abs(pca.loadings[,3]) >= 0.8*max(abs(pca.loadings[,3]))),1:3]
+
+
+variance <- 100*(pca$sdev^2)/sum(pca$sdev^2)
+cumvar <- cumsum(variance)
+names(cumvar) <- paste0("PC",1:17)
+
+variance2 <- 100*(pca.no.stand$sdev^2)/sum(pca.no.stand$sdev^2)
+cumvar2 <- cumsum(variance2)
+names(cumvar2) <- paste0("PC",1:17)
+
+barplot(variance, main="% Wariancji poszczególnych składowych", names.arg=paste0("PC",1:17),las=2,ylim=c(0,100)) # Miałem problem z ustaleniem etykiet słupków dla plot(pca)
+boxplot(pca$x, main="Wykresy pudełkowe poszczególnych składowych",las=2)
+
+barplot(variance2, main="% Wariancji poszczególnych składowych (bez standaryzacji)", names.arg=paste0("PC",1:17),las=2, ylim=c(0,100))
+boxplot(pca.no.stand$x, main="Wykresy pudełkowe poszczególnych składowych (bez standaryzacji)",las=2)
+
+barplot(cumvar, main="Skumulowana wariancja (w %)",las=2)
+abline(h=80, col="green", lty=2, lwd=2)
+abline(h=90, col="red", lty=2, lwd=2)
+legend("right", legend=c("80%","90%"), lwd=2, lty=2, col=c("green","red"))
+
+barplot(cumvar2, main="Skumulowana wariancja (w %) (bez standaryzacji)", las=2)
+abline(h=80, col="green", lty=2, lwd=2)
+abline(h=90, col="red", lty=2, lwd=2)
+legend("right", legend=c("80%","90%"), lwd=2, lty=2, col=c("green","red"))
+
+kolory <- rainbow(6)
+
+par(mar=c(5.1, 4.1, 4.1, 8.5), xpd=TRUE)
+
+plot(pca.no.stand$x[,1],pca.no.stand$x[,2], xlab="PC1",ylab="PC2", col = kolory[as.numeric(dane$UA_Continent)],
+     pch=16, main = "PCA bez standaryzacji")
+miasta <- which(pca.no.stand$x[,1]>-12 |
+                  (pca.no.stand$x[,1] > -22 & pca.no.stand$x[,2] < -9) |
+                  pca.no.stand$x[,1] > -15 & pca.no.stand$x[,2] > 6)
+points(pca.no.stand$x[miasta,1],pca.no.stand$x[miasta,2], pch =13, col = "black")
+text(pca.no.stand$x[miasta,1],pca.no.stand$x[miasta,2],
+     labels=dane$UA_Name[miasta])
+legend("topright",legend=levels(dane$UA_Continent), col=kolory, pch=16,bg="azure2", cex=0.8, inset=c(-0.3,0))
+par(mar=c(4,4,4,4),xpd=FALSE)
+
+scatter3D(pca.no.stand$x[,1], pca.no.stand$x[,2], pca.no.stand$x[,3], xlab="PC1", ylab="PC2", zlab="PC3",  
+          colvar=as.numeric(dane$UA_Continent), col=kolory, colkey = FALSE, cex=0.8) 
+title("Dane uaScores -  wykres rozrzutu 3D")
+text3D(pca.no.stand$x[miasta,1], pca.no.stand$x[miasta,2], pca.no.stand$x[miasta,3],  labels = dane$UA_Name[miasta], add=TRUE)
+legend("topright",legend=levels(dane$UA_Continent), col=kolory, pch=16,bg="azure2")
+
+fviz_pca_biplot(pca.no.stand, label="var", col.ind = dane$UA_Continent)
+fviz_pca_biplot(pca, label = "var", col.ind = dane$UA_Continent)
+
+par(mar=c(5.1, 4.1, 4.1, 8.5), xpd=TRUE)
+plot(pca$x[,1],pca$x[,2],col = kolory[as.numeric(dane$UA_Continent)], pch=16, main="PCA ze standaryzacją", xlab="PC1", ylab="PC2")
+legend("topright",legend=levels(dane$UA_Continent), col=kolory, pch=16,bg="azure2", cex=0.6, inset=c(-0.3,0))
+par(mar=c(4,4,4,4),xpd=F)
+fviz_pca_var(pca.no.stand, col.var="black", labelsize=4, repel=TRUE)
+corrplot(cor(dane.ilosciowe))
+```
+
+Jak możemy zaobserwować (rys. 11), w przypadku danych niestandaryzowanych, pierwsza składowa główna odpowiada za około 90% wariancji. Analizując wektory ładunków moglibyśmy zauważyć, że wpływ poszczególnych cech na PC1 jest zbliżony choć największy mają cechy Business.Freedom, Safety, Healthcare i Tolerance, a najmniejszy Venture.Capital i Travel.Connectivity. W przypadku PC2 dominują Housing i Cost.of.Living, istotne są też Education i Venture.Capital. PC1 interpretował bym jako informację o jakości usług publicznych i warunkach ekonomicznych, a PC2 jako "affordability". Dla danych niestandaryzowanych potrzeba aż siedmiu składowych głównych do wyjaśnienia 80% wariancji i dziesięciu do wyjaśnienia 90% wariancji (rys. 13). Na dwuwykresie i macierzy kowariancji (rys. 17, rys. 20, rys. 21) możemy zaobserować, że cechy o dużej korelacji to te, których wektory na dwuwykresie są do siebie zbliżone. Jednocześnie najbardziej skrajne wektory (o najmniejszej korelacji ze sobą wzajemnie) - Education i Venture.Capital z jednej strony, oraz Housing i Cost.of.Living z drugiej - są tymi które mają największy udział w PC2. Wyróżnić możemy też zgrupowanie związane z jakością życia codziennego (safety, tolerance, culture etc.) i związane z ekonomią (economy, startups, business freedom). 
+
+## Podsumowanie
+
+Zastosowanie PCA do danych bez standaryzacji zredukowało nasze dane do (z grubsza) jednej zmiennej, co niestety trochę utrudnia interpretację składowych - w pierwszej składowej głównej udział mają praktycznie wszystkie cehy. Z kolei w przypadku danych standaryzowanych PCA nie spełniło swej roli - trzy pierwsze składowe główne wyjaśniają mniej, niż 60% wariancji.
+
+\newpage
+
+# Zadanie 3 - MDS
+
+Do ilustracji skalowania wielowymiarowego wykorzystamy dane Titanic zawierające informacje o pasażerach Titanica. Zbiór danych zawiera m.in następujące informacje:
+
+* Czy pasażer przeżył (Survived - 0,1)
+* Klasa podróży (Pclass - 1,2,3)
+* Płeć (Sex - "female", "male")
+* Wiek (age)
+* Małżonkowie i rodzeństwo obecne na pokładzie (SibSp)
+* Rodzice/dzieci na pokładzie (Parch)
+* Cena biletu (Fare)
+* Miasto zaokrętowania (Embarked)
+
+```{r MDS, echo=FALSE, results='asis',fig.width=7, fig.cap=c("Wykresy pudełkowe zmiennych Age i Fare. Zmienna Fare zawiera dużo obserwacji ekstremalnych, które ze względu na czytelność wykresu zostały ucięte", "Diagram Sheperda porównujący oryginalne odległości między przypadkami z odległościami po skalowaniu wielowymiarowym. Im bliżej prostej y=x znajdują się przypadki, tym większa skuteczność skalowania.","Ilustracja wyników skalowania z podziałem na płeć","Ilustracja wyników skalowania z podziałem na klasę")}
+dane <- titanic_train
+wymiar <- dim(dane)
+cechy <- wymiar[2]
+#str(dane)
+dane$Survived <- as.factor(dane$Survived)
+dane$Pclass <- as.ordered(dane$Pclass)
+dane$Embarked <- as.factor(dane$Embarked)
+dane$Sex <- as.factor(dane$Sex)
+dane[,c(1,4,9,11)] <- NULL
+#str(dane)
+boxplot(dane[,c(4,7)],ylim=c(0,100), main="wykresy pudełkowe zmiennych age i fare")
+
+wymiar <- dim(dane)
+cechy <- wymiar[2]
+
+diss <- daisy(dane[,2:cechy], stand = TRUE)
+mds <- cmdscale(diss, k=2)
+
+diss.matrix <- as.matrix(diss)
+dist.mds <- as.matrix(dist(mds))
+
+plot(diss.matrix,dist.mds, main = "Diagram Shepherda", xlab="Oryginalne odległości",
+     ylab = "odległości po skalowaniu")
+abline(coef=c(0,1), col="red", lty=2, lwd=2) # Może być
+kolory=c("red","black")
+kształty = c(6,1)
+
+plot(mds[,1],mds[,2], col = kolory[as.numeric(dane$Survived)], pch=kształty[as.numeric(dane$Sex)],xlab="MDS1",ylab="MDS2", main="Wykres rozrzutu MDS1~MDS2 z podziałem na płeć")
+abline(0,1,col="grey",lty=2)
+legend("topleft",legend = c("not survived", "survived","female","male"),
+       col=c("red","black","grey","grey"),
+       pch=c(16,16,6,1),bg="azure", cex=0.8)
+points(-0.07,-0.07, col="blue", pch=16)
+
+
+kształty2 = c(3,4,5)
+plot(mds[,1],mds[,2], col = kolory[as.numeric(dane$Survived)], pch=kształty2[as.numeric(dane$Pclass)],xlab="MDS1",ylab="MDS2",main="Wykres rozrzutu MDS1~MDS2 z podziałem na klasę")
+abline(0,1,col="grey",lty=2)
+legend("topleft",legend = c("not survived", "survived","class 1","class 2", "class3"),
+       col=c("red","black","grey","grey", "grey"),
+       pch=c(16,16,3,4,5),
+       bg="azure", cex=0.8)
+points(-0.07,-0.07, col="blue", pch=16)
+
+
+
+```
+
+Na diagramie Shepherda (rys. 23) widzimy, że zachowywanie odległości przez skalowanie pozostawia wiele do życzenia z tendencją do zaniżania odległości, jednak liniowy trend jest wyraźny.  
+Na wykresach rozrzutu MDS1~MDS2 (rys. 24, rys. 25) przypadki dzielą się na dwa wyraźne skupiska, z których oba składają się z czterech mniejszych skupisk. Większe skupiska zdają się być symetryczne względem mniej-więcej punktu (-0,07;-0,07) zaznaczonego na niebiesko. Większe zgrupowanie ponad zaznaczoną prostą charakteryzuje się dominującą frakcją kobiet, zgrupowanie poniżej prostej - przeciwnie. Patrząc na rysunek 25 zauważymy, najwyższa klasa (1) znajduje się w niższych zakresach składowej MDS 1 i maleje wraz z jej wzrostem. Badając wartości cechy Survived możemy odnotować, że kobiety miały większą przeżywalność niż mężczyźni, a pasażerowie z wyższych klas społecznych większą, niż ci z niższych. Druga obserwacja jest szczególnie wyraźna wśród kobiet.

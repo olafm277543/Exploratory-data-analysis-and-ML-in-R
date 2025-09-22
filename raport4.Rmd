@@ -1,0 +1,555 @@
+---
+title: "Raport 4"
+subtitle: "Eksploracja danych"
+author: "Olaf Masłowski, album 277543"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage[OT4]{polski}
+   - \usepackage[utf8]{inputenc}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+output: 
+  pdf_document:
+    toc: true
+    fig_caption: yes
+    fig_width: 5 
+    fig_height: 4 
+    number_sections: true
+fontsize: 12pt 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+knitr::opts_chunk$set(cache = TRUE)
+library(mlbench)
+library(ada)
+library(ipred)
+library(rpart)
+library(e1071)
+library(factoextra)
+library(cluster)
+library(dplyr)
+library(GGally)
+library(xtable)
+```
+
+\newpage
+
+# Wstęp
+
+W pierwszej części będę kontynuować analizę danych PimaIndiansDiabetes wykorzystując rodziny klasyfikatorów.
+
+```{r dane, echo=FALSE}
+data("PimaIndiansDiabetes")
+dane <- PimaIndiansDiabetes
+set.seed(123)
+#str(dane)
+#?PimaIndiansDiabetes
+# usuwam podejrzane zera # Przez pomyłkę wybrałem standardową wersję (bez 2 na końcu),
+# ale z tego co mi wiadomo, róznica polega na zamianie podejrzanych zer w NA
+
+dane <- dane[-c(which(dane$glucose==0),
+       which(dane$pressure==0),
+       which(dane$triceps==0),
+       which(dane$insulin==0),
+       which(dane$mass==0)
+       ),
+     ]
+
+dane[,-9] <- scale(x=dane[,-9],center=TRUE,scale=TRUE)
+# Największą zdolność dyskryminacyjną zdają się mieć zmienne glucose, oraz age
+
+# Zbiór testowy i treningowy
+
+trainsample <- sample(1:dim(dane)[[1]],round(0.66*dim(dane)[[1]]))
+trainset <- dane[trainsample,]
+testset <- dane[-trainsample,]
+
+ntrain <- dim(trainset)[[1]]
+ntest <- dim(testset)[[1]]
+
+ztrain <- runif(ntrain)
+ztest <- runif(ntest)
+
+predykcjat <- function(x) predict(x,testset) # Czemu wcześniej na to nie wpadłem?
+predykcja <- function(x) predict(x,trainset)
+
+macierzodm <- function(x) table(trainset$diabetes,x)
+macierzodmt <- function(x) table(testset$diabetes,x)
+
+bladklas <- function(x) (ntrain - sum(diag(x)))/ntrain
+bladklast <- function(x) (ntest - sum(diag(x)))/ntest
+```
+
+# Zadanie 1 - Zaawansowane metody klasyfikacji
+
+## Boosting
+
+Wykorzystam funkcję ada(){ada} do implementacji algorytmu metody boosting - Adaboost.
+
+```{r ada, echo=FALSE,results='asis', dependson="dane", fig.cap=c("Błąd klasyfikacji na zbiorze treningowym w zależności od liczby iteracji. Wszystkie zmienne","Błąd klasyfikacji na zbiorze treningowym w zależności od liczby iteracji. Zmienne glucose i age","Wykres rozrzutu z podziałem na wynik klasyfikacji i rzeczywistą etykietkę dla danych uczących z wykorzystaniem wszystkich zmiennych. Liczba iteracji - 50.")}
+# AdaBoost
+
+# modele
+
+ada1 <- ada(diabetes ~ .,data = trainset, iter=20)
+ada2 <- ada(diabetes ~ .,data = trainset, iter=50)
+ada3 <- ada(diabetes ~ age + glucose,data = trainset, iter=20)
+ada4 <- ada(diabetes ~ age + glucose,data = trainset, iter=50)
+
+# predykcje
+
+adapred1 <- predict(ada1,trainset)
+adapred2 <- predict(ada2,trainset)
+adapred3 <- predict(ada3,trainset)
+adapred4 <- predict(ada4,trainset)
+
+
+adapred1t <- predict(ada1,testset)
+adapred2t <- predict(ada2,testset)
+adapred3t <- predict(ada3,testset)
+adapred4t <- predict(ada4,testset)
+
+# macierze
+
+adamatrix1 <- (table(trainset$diabetes,adapred1))
+adamatrix2 <- (table(trainset$diabetes,adapred2))
+adamatrix3 <- (table(trainset$diabetes,adapred3))
+adamatrix4 <- (table(trainset$diabetes,adapred4))
+
+adamatrix1t <- (table(testset$diabetes,adapred1t))
+adamatrix2t <- (table(testset$diabetes,adapred2t))
+adamatrix3t <- (table(testset$diabetes,adapred3t))
+adamatrix4t <- (table(testset$diabetes,adapred4t))
+
+# Błędy
+
+adaerror1 <- (ntrain - sum(diag(adamatrix1)))/ntrain
+adaerror2 <- (ntrain - sum(diag(adamatrix2)))/ntrain
+adaerror3 <- (ntrain - sum(diag(adamatrix3)))/ntrain
+adaerror4 <- (ntrain - sum(diag(adamatrix4)))/ntrain
+
+adaerror1t <- (ntest - sum(diag(adamatrix1t)))/ntest
+adaerror2t <- (ntest - sum(diag(adamatrix2t)))/ntest
+adaerror3t <- (ntest - sum(diag(adamatrix3t)))/ntest
+adaerror4t <- (ntest - sum(diag(adamatrix4t)))/ntest
+
+plot(ada2)
+plot(ada4)
+
+my.predict  <- function(model, newdata) predict(model, newdata=newdata, type="class")
+my.ada <- function(formula1, data1, iter) ada(formula=formula1,data=data1,iter=iter)
+adaerrorx1 <- errorest(diabetes ~ glucose + age, dane, model=my.ada, predict=my.predict, estimator="cv",     
+                   est.para=control.errorest(k = 10), iter=50)
+adaerrorx2 <- errorest(diabetes ~ ., dane, model=my.ada, predict=my.predict, estimator="cv",     
+                       est.para=control.errorest(k = 10), iter=50)
+tabelkabledowada <- as.data.frame(cbind(
+  parametry = c("train, iter = 20","train, iter = 50","train, iter = 20, g + a", "train, iter = 50, g + a", "test, iter = 20","test, iter = 50","test, iter = 20, g + a", "test, iter = 50, g + a","crossvalidation, iter=50, g + a", "crossvalidation, iter = 50"),
+  error = c(adaerror1,adaerror2, adaerror3, adaerror4, adaerror1t, adaerror2t, adaerror3t, adaerror4t, adaerrorx1$error, adaerrorx2$error)
+))
+
+daneada <- cbind(trainset,ztrain,adapred2)
+names(daneada)[[11]] <- "ada"
+ggplot(daneada, aes(x=glucose,y=ztrain, col=diabetes, shape=ada)) + geom_point() + ggtitle("Wykres rozrzutu z podziałem na grupy")
+
+tabelkabledowada$error <- as.numeric(tabelkabledowada$error)
+tab1 <- xtable(tabelkabledowada, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji", label = "tabela1")
+print(tab1, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+
+## Bagging
+
+```{r boosting, echo=FALSE,results='asis',dependson="dane", fig.cap="Wykres rozrzutu z podziałem na wynik klasyfikacji i rzeczywistą etykietkę dla danych uczących z wykorzystaniem wszystkich zmiennych, nbag=25, minsplit=0, cp=0"}
+# Bagging
+
+bag1 <- bagging(diabetes~., data=trainset,nbag=25,minsplit=0,cp=0)
+bag2 <- bagging(diabetes~., data=trainset,nbag=25,minsplit=0,cp=0.02)
+bag3 <- bagging(diabetes~age + glucose, data=trainset,nbag=25,minsplit=0,cp=0)
+bag4 <- bagging(diabetes~age + glucose, data=trainset,nbag=25,minsplit=0,cp=0.02)
+
+# predykcja
+
+bagpred1 <-  predykcja(bag1)
+bagpred2 <-  predykcja(bag2)
+bagpred3 <-  predykcja(bag3)
+bagpred4 <-  predykcja(bag4)
+
+bagpred1t <-  predykcjat(bag1)
+bagpred2t <-  predykcjat(bag2)
+bagpred3t <-  predykcjat(bag3)
+bagpred4t <-  predykcjat(bag4)
+bag1
+# macierze
+
+
+bagmatrix1 <- macierzodm(bagpred1)
+bagmatrix2 <- macierzodm(bagpred2)
+bagmatrix3 <- macierzodm(bagpred3)
+bagmatrix4 <- macierzodm(bagpred4)
+
+bagmatrix1t <- macierzodmt(bagpred1t)
+bagmatrix2t <- macierzodmt(bagpred2t)
+bagmatrix3t <- macierzodmt(bagpred3t)
+bagmatrix4t <- macierzodmt(bagpred4t)
+
+# Kilka wniosków:
+# wybranie mniejszej ilości zmiennych o większych możliwościach dyskryminacyjnych
+# nie sprawdza się dla rodzin klasyfikatorów
+# Ogólniej - manipulacja parametrami i "kombinowanie" zdaje się nie przynosić efektów
+
+# Błędy
+
+
+
+errorbag1 <-  bladklas(bagmatrix1)
+errorbag2 <-  bladklas(bagmatrix2)
+errorbag3 <-  bladklas(bagmatrix3)
+errorbag4 <-  bladklas(bagmatrix4)
+
+errorbag1t <-  bladklast(bagmatrix1t)
+errorbag2t <-  bladklast(bagmatrix2t)
+errorbag3t <-  bladklast(bagmatrix3t)
+errorbag4t <-  bladklast(bagmatrix4t)
+
+my.bag <- function(formula1, data1, nbag,minsplit,cp) bagging(formula=formula1,data=data1,nbag=nbag,minsplit=minsplit,cp=cp)
+bagerrorx1 <- errorest(diabetes ~ ., dane, model=my.bag, predict=my.predict, estimator="cv",     
+                       est.para=control.errorest(k = 10), nbag=25,minsplit=0,cp=0)
+bagerrorx2 <- errorest(diabetes ~ age + glucose, dane, model=my.bag, predict=my.predict, estimator="cv", est.para=control.errorest(k = 10), nbag=25,minsplit=0,cp=0)
+
+tabelkabledowbag <- as.data.frame(cbind(
+  parametry = c("train, nbag 25, ms 0, cp 0","train, nbag 25, ms 0, cp 0.02",
+                "train, nbag 25, ms 0, cp 0, g + a","train, nbag 25, ms 0, cp 0.02, g + a",
+                "test, nbag 25, ms 0, cp 0","test, nbag 25, ms 0, cp 0.02",
+                "test, nbag 25, ms 0, cp 0, g + a","test, nbag 25, ms 0, cp 0.02, g + a",
+                "crossvalidation, nbag 25, ms 0, cp 0","crossvalidation, nbag 25, ms 0, cp 0, g + a"
+                ),
+  error = c(errorbag1, errorbag2, errorbag3, errorbag4, errorbag1t, errorbag2t, errorbag3t, errorbag4t, bagerrorx1$error, bagerrorx2$error)
+))
+
+danebag <- cbind(trainset,ztrain,bagpred1)
+names(danebag)[[11]] <- "bag"
+ggplot(danebag, aes(x=glucose,y=ztrain, col=diabetes, shape=bag)) + geom_point() + ggtitle("Wykres rozrzutu z podziałem na grupy")
+
+tabelkabledowbag$error <- as.numeric(tabelkabledowbag$error)
+tab2 <- xtable(tabelkabledowbag, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji", label = "tabela2")
+print(tab2, type = "latex", table.placement = "H", comment=FALSE)
+```
+## SVM
+
+```{r svm, echo=FALSE, results='asis', dependson="dane", fig.cap=c("Klasyfikacja metodą wektorów nośnych z jądrem radialnym. gamma = 1, cost = 1, dane uczące","Wykres (mapa cieplna) skuteczności SVM w zależności od kosztu i gammy", "Klasyfikacja SVM z wykorzystaniem optymalnych parametrów")}
+# SVM
+
+# modele
+
+svm1 <- svm(diabetes~age+glucose,data=trainset,kernel="linear") # cost = 1
+svm2 <- svm(diabetes~age+glucose,data=trainset,kernel="polynomial") # degree = 3
+svm3 <- svm(diabetes~age+glucose,data=trainset,kernel="radial") # gamma = 1
+svm4 <- svm(diabetes~age+glucose,data=trainset,kernel="linear",cost=0.5,degree=10)
+svm5 <- svm(diabetes~age+glucose,data=trainset,kernel="polynomial",cost=0.5)
+svm6 <- svm(diabetes~age+glucose,data=trainset,kernel="radial",cost=0.5,gamma=0.5)
+
+plot(svm3, data = trainset,glucose~age)
+# predykcje
+
+svm1pred <- predykcja(svm1)
+svm2pred <- predykcja(svm2)
+svm3pred <- predykcja(svm3)
+svm4pred <- predykcja(svm4)
+svm5pred <- predykcja(svm5)
+svm6pred <- predykcja(svm6)
+
+svm1predt <- predykcjat(svm1)
+svm2predt <- predykcjat(svm2)
+svm3predt <- predykcjat(svm3)
+svm4predt <- predykcjat(svm4)
+svm5predt <- predykcjat(svm5)
+svm6predt <- predykcjat(svm6)
+
+# macierze
+
+svmmatrix1 <- macierzodm(svm1pred) # linear cost 1
+svmmatrix2 <- macierzodm(svm2pred) # polynomial degree 3
+svmmatrix3 <- macierzodm(svm3pred) # radial gamma 1
+svmmatrix4 <- macierzodm(svm4pred) # linear cost 0.5
+svmmatrix5 <- macierzodm(svm5pred) # polynomial degree 10
+svmmatrix6 <- macierzodm(svm6pred) # radial gamma 0.5
+
+svmmatrix1t <- macierzodmt(svm1predt)
+svmmatrix2t <- macierzodmt(svm2predt)
+svmmatrix3t <- macierzodmt(svm3predt)
+svmmatrix4t <- macierzodmt(svm4predt)
+svmmatrix5t <- macierzodmt(svm5predt)
+svmmatrix6t <- macierzodmt(svm6predt)
+
+# błędy
+
+svm1error1 <- bladklas(svmmatrix1)
+svm1error2 <- bladklas(svmmatrix2)
+svm1error3 <- bladklas(svmmatrix3)
+svm1error4 <- bladklas(svmmatrix4)
+svm1error5 <- bladklas(svmmatrix5)
+svm1error6 <- bladklas(svmmatrix6)
+
+svm1error1t <- bladklast(svmmatrix1t)
+svm1error2t <- bladklast(svmmatrix2t)
+svm1error3t <- bladklast(svmmatrix3t)
+svm1error4t <- bladklast(svmmatrix4t)
+svm1error5t <- bladklast(svmmatrix5t)
+svm1error6t <- bladklast(svmmatrix6t)
+
+# dostrojenie
+# Ten sam zestaw danych jest analizowany w jednym z plików na eportalu
+# Postaram się urozmaicić proponowane rozwiązanie o tyle, o ile to możliwe
+
+
+# Jądro gaussowskie (optymalizujemy C i gamma)
+C.range <- 2^((-12):8)
+gamma.range <- 2^((-12):8)
+radial.tune <- tune(svm, train.x=trainset[,c("glucose", "age")],
+                    train.y=trainset[,"diabetes"],
+                    kernel="radial",
+                    ranges=list(cost=C.range, gamma=gamma.range))
+
+print(radial.tune) # gamma 2^-10, cost 2^-7
+#plot(radial.tune, transform.x=log, transform.y=log )
+plot(radial.tune, transform.x=log, transform.y=log, color.palette = topo.colors)
+#plot(radial.tune, type="perspective")
+
+
+# Dopasowujemy końcowy model dla optymalnych parametrów
+
+C.best <- radial.tune$best.parameters[["cost"]]
+gamma.best <- radial.tune$best.parameters[["gamma"]]
+
+svm.radial.tuned <- svm(diabetes~glucose+age,
+                        data=trainset, kernel="radial",
+                        cost=C.best, gamma=gamma.best)
+
+
+# Prognozowanie na bazie optymalnego modelu
+pred.svm.radial.tuned <- predict(svm.radial.tuned, newdata=trainset)
+pred.svm.radial.tunedt <- predict(svm.radial.tuned, newdata=testset)
+
+err.svm.radial <- 1 - (sum(diag(table(pred.svm.radial.tuned, trainset$diabetes)))/ntrain)
+err.svm.radialt <- 1 - (sum(diag(table(pred.svm.radial.tunedt, testset$diabetes)))/ntest)
+
+plot(svm.radial.tuned, data=trainset, glucose~age)
+
+tabelkabledowsvm <- as.data.frame(cbind(
+  parametry = c("train, linear, cost 1", "train, polynomial, degree 3, cost 1", "train, radial, cost 1, gamma 0.5", "train, linear, cost 0.5", "train, polynomial, degree 10, cost 0.5", "train, radial, cost 0.5, gamma 0.5","test, linear, cost 1", "test, polynomial, degree 3, cost 1", "test, radial, cost 1, gamma 0.5", "test, linear, cost 0.5", "test, polynomial, degree 10, cost 0.5", "test, radial, cost 0.5, gamma 0.5", "train, radial, cost tuned (256), gamma tuned (2^-10)", "test, radial, cost tuned (256), gamma tuned (2^-10)"
+                ),
+  error = c(svm1error1, svm1error2, svm1error3, svm1error4, svm1error5, svm1error6, svm1error1t, svm1error2t, svm1error3t, svm1error4t, svm1error5t, svm1error6t, err.svm.radial, err.svm.radialt)
+))
+
+tabelkabledowsvm$error <- as.numeric(tabelkabledowsvm$error)
+tab3 <- xtable(tabelkabledowsvm, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji", label = "tabela3")
+print(tab3, type = "latex", table.placement = "H", comment=FALSE)
+```
+"Strojenie" parametrów nie przyniosło oszałamiających efektów, ale trzeba mieć na uwadze, że i bez strojenia skuteczność SVM była bardzo dobra. Metoda zdaje się nie być bardzo wrażliwa na dobór odpowiednich parametrów - nawet domyślne wartości zapewniły satysfakcjonujące rezultaty.
+
+## Podsumowanie
+
+Każda z powyższych metod cechuje się wysoką dokładnością - wyższą, niż można oczekiwać większości standardowych metod stosowanych w klasyfikacji. Metoda SVM wyróżnia się przede wszystkim dobrymi efektami niezależnie od dobranych parametrów. Metoda boosting osiąga dobre wyniki dla większej ilości iteracji, jednak dłuższy czas działania jest odczuwalny. Metoda bagging działa dobrze, ale nie jest łatwo wybrać odpowiednie parametry. Biorąc pod uwagę powyższe, oceniam, że najlepszą skuteczność wykazała metoda wektorów nośnych.
+
+# Zadanie 2 - Analiza skupień – algorytmy grupujące i hierarchiczne
+
+## PAM (Partition around medoids)
+
+```{r pam, echo = FALSE, results='asis', dependson="dane", fig.width=7, fig.height=7, fig.cap="Wykres sillhouette - PAM"}
+# Analiza skupień
+
+# Standaryzacja wykonana wcześniej
+
+## PAM ##
+
+dane3 <- dane
+dane3 <- dane3[sample(1:dim(dane3)[[1]],200),]
+dane2 <- dane3[,1:8] 
+# Macierz niepodobieństwa
+diss <- daisy(dane2)
+dissmatrix <- as.matrix(daisy(dane2))
+
+pam1 <- pam(x=dissmatrix, diss=TRUE, k=2)
+pam2 <- pam(x=dane2,k=2)
+plot(pam1)
+etykietkipam1 <- pam1$clustering
+medoidy <- pam1$medoids
+```
+
+```{r pam2, echo=FALSE, results='asis', dependson=c("dane","pam"),fig.cap=c("Wykres rozrzutu po redukcji wymiarów PCA z podziałem na wynik grupowania i rzeczywistą etykietkę","Wykres rozrzutu z zaznaczonymi klastrami","Wykres zależności średniej wartości silhouette od liczby klastrów","Wykres zależności zgodności partycji od liczby klastrów"), fig.width=7}
+# PCA
+
+pca <- prcomp(dane2)
+
+# scatterplot
+
+kolory <- c("black","red")
+kształty <- c(1,2)
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty[as.numeric(etykietkipam1)],
+     xlab="PCA1",ylab="PCA2",main=c("PAM","wykres rozrzutu po redukcji wymiarów"))
+legend("bottomright",col=c("black","red","grey","grey"), pch=c(16,16,1,2),legend = c("neg","pos","pam1","pam2"), cex=0.8, bg="navajowhite")
+fviz_cluster(pam2)
+
+
+# Macierz pomyłek
+
+errormatrixpam <- as.matrix(table(dane3$diabetes,etykietkipam1))
+
+# błąd
+
+errpam <- (200 - sum(diag(errormatrixpam)))/200
+
+# Silhouette dla różnych k
+
+fviz_nbclust(dane2, FUNcluster = pam, method = "silhouette") # optymalne k = 2
+
+# matchclasses
+
+partition.agreement <- numeric(15)
+for (k in 2:15) {
+  pam.k <- pam(dane2, k=k)$clustering
+  matchClasses(table(pam.k, dane3$diabetes), method="rowmax", verbose = FALSE)
+  part.agreement <- compareMatchedClasses(pam.k, dane3$diabetes, method="rowmax")$diag
+  partition.agreement[k] <- part.agreement
+}
+
+plot(2:15, partition.agreement[-1], pch="x", type="b", col="firebrick",xlab="K (liczba klastrow)", ylab="zgodnosc partycji")
+title("Zgodność partycji dla PAM w porównaniu z faktycznymi etykietami", cex=0.8)
+grid()
+# optymalne k = 2
+tab4 <- xtable(errormatrixpam, digits = 3, row.names = F, caption = "Macierz pomyłek dla metody PAM", label = "tabela4")
+
+print(tab4, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+## Agnes (Aglomerative nesting)
+
+
+```{r agnes, echo=FALSE, results='asis',dependson="dane", fig.height=8,fig.width=7, fig.cap=c("Dendrogram Agnes, average linkage.","single linkage", "complete linkage")}
+## Agnes ##
+
+agnesavg <- agnes(x=dissmatrix,diss=TRUE, method="average")
+agnessingle <- agnes(x=dissmatrix,diss=TRUE, method="single")
+agnescomplete <- agnes(x=dissmatrix,diss=TRUE, method="complete")
+
+fviz_dend(agnesavg,cex=0.4, show_labels = F)
+fviz_dend(agnessingle,cex=0.4, show_labels = F)
+fviz_dend(agnescomplete,cex=0.4, show_labels = F)
+```
+
+```{r agnes2, echo=FALSE, results='asis',dependson=c("dane","agnes"), fig.width=7, fig.cap=c("Wykres rozrzutu dla algorytmu Agnes z metodą najdalszego sąsiada. Liczba klastrów - 2", "Wykres rozrzutu dla algorytmu Agnes z metodą najdalszego sąsiada. Liczba klastrów - 3", "Wykres rozrzutu dla algorytmu Agnes z metodą najdalszego sąsiada. Liczba klastrów - 5","Wykres zależności średniej wartości silhouette od liczby klastrów dla algorytmu Agnes z metodą najdalszego sąsiada", "Wykres zależności średniej wartości silhouette od liczby klastrów dla algorytmu Agnes z metodą odległości średniej","Wykres zależności średniej wartości silhouette od liczby klastrów dla algorytmu Agnes z metodą najbliższego sąsiada","Wykres zgodności klastrów z faktycznymi etykietami (diabetes) z podziałem na metody łączenia klastrów")}
+
+agnescompk2 <- cutree(agnescomplete,k=2)
+
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty[as.numeric(agnescompk2)],
+     xlab="PCA1",ylab="PCA2",main=c("Agnes - complete","wykres rozrzutu po skalowaniu wielowymiarowym", "2 klastry"))
+legend("bottomright",col=c("black","red","grey","grey"), pch=c(16,16,1,2),legend = c("neg","pos","agnes1","agnes2"), bg="navajowhite", cex=0.9)
+# Tylko jeden obiekt w jednym z klastrów. Ale separacja bardzo dobra
+agnescompk3 <- cutree(agnescomplete,k=3)
+kształty2 <- c(1,2,3)
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty2[as.numeric(agnescompk3)],
+     xlab="PCA1",ylab="PCA2",main=c("Agnes - complete","wykres rozrzutu po skalowaniu wielowymiarowym", "3 klastry"))
+legend("bottomright",col=c("black","red","grey","grey","grey"), pch=c(16,16,1,2,3),legend = c("neg","pos","agnes1","agnes2","agnes3"), bg="navajowhite",cex=0.8)
+# Nadal nie wygląda to dobrze
+agnescompk5 <- cutree(agnescomplete,k=5)
+kształty3 <- c(1,2,3,4,5)
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty3[as.numeric(agnescompk5)],
+     xlab="PCA1",ylab="PCA2",main=c("Agnes - complete","wykres rozrzutu po skalowaniu wielowymiarowym", "5 klastrów"))
+legend("bottomright",col=c("black","red","grey","grey","grey","grey","grey"),
+       pch=c(16,16,1,2,3,4,5),legend = c("neg","pos","agnes1","agnes2","agnes3","agnes4","agnes5"), bg="navajowhite", cex=0.7)
+
+
+# Przygotowanie do fviz_nbclust
+agnesklastrycomp <- function(data,k) {
+  tree <- agnes(x=data,diss=F,method="complete")
+  cluster1 <- cutree(tree,k=k)
+  lista <- list(cluster = cluster1)
+  return(lista)
+}
+agnesklastryavg <- function(data,k) {
+  tree <- agnes(x=data,diss=F,method="average")
+  cluster1 <- cutree(tree,k=k)
+  lista <- list(cluster = cluster1)
+  return(lista)
+}
+agnesklastrysingle <- function(data,k) {
+  tree <- agnes(x=data,diss=F,method="single")
+  cluster1 <- cutree(tree,k=k)
+  lista <- list(cluster = cluster1)
+  return(lista)
+}
+
+# silhouette dla różnych k i metod
+
+fviz_nbclust(dane2, FUNcluster = agnesklastrycomp, method="silhouette") + ggtitle("linkage: complete")
+fviz_nbclust(dane2, FUNcluster = agnesklastryavg, method="silhouette") + ggtitle("linkage: average")
+fviz_nbclust(dane2, FUNcluster = agnesklastrysingle, method="silhouette") + ggtitle("linkage: single")
+
+# matchclasse
+p.agr.comp <- numeric(15)
+p.agr.avg <- numeric(15)
+p.agr.single <- numeric(15)
+for (k in 2:15) {
+  agnes.comp.k <- agnesklastrycomp(dane2,k)$cluster
+  agnes.avg.k <- agnesklastryavg(dane2,k)$cluster
+  agnes.single.k <- agnesklastrysingle(dane2,k)$cluster
+  pa.agnes.comp <- compareMatchedClasses(agnes.comp.k, dane3$diabetes, method="rowmax")$diag
+  pa.agnes.avg <- compareMatchedClasses(agnes.avg.k, dane3$diabetes, method="rowmax")$diag
+  pa.agnes.single <- compareMatchedClasses(agnes.single.k, dane3$diabetes, method="rowmax")$diag
+  p.agr.comp[k] <- pa.agnes.comp
+  p.agr.avg[k] <- pa.agnes.avg
+  p.agr.single[k] <- pa.agnes.single
+}
+
+plot(2:15, p.agr.comp[-1], pch="x", type="b", col="firebrick",xlab="K (liczba klastrow)", ylab="zgodnosc partycji")
+lines(2:15, p.agr.avg[-1], pch="x", type="b", col="blue")
+lines(2:15, p.agr.single[-1], pch="x", type="b", col="green")
+title("Zgodność partycji dla AGNES w porównaniu z faktycznymi etykietami")
+legend("topright",col=c("firebrick","blue","green"),lwd=2,legend=c("complete","average","single"))
+grid()
+```
+## Podsumowanie
+
+```{r podsumowanie, echo=FALSE, results='asis', dependson=c("pam","pam2","agnes", "agnes2", "dane"), fig.height=8,fig.width=7, fig.cap=c("Zestawienie wykresów z podziałem na klastry algorytmu PAM.", "Wykres rozrzutu (rys9) z zaznaczonymi medoidami","Zestawienie wykresów z podziałem na klastry algorytmu Agnes")}
+# Wszystkie metody i liczby klastrów dla AGNES oferują niezadowalającą jakość jeśli chodzi o podobieństwo
+# do pierwotnych klas. Jednak mogą się one poszyczcić wyższym średnim silhouette.
+# oceniam, że algorytm PAM (k=2 najlepszy zarówno pod względem sillhouette, jak i matchclasses) poradził sobie lepiej niż AGNES, którego parametry wybrał bym na k = 5, linkage = average.
+# dopiero przy takich parametrach widać jakąkolwiek strukturę na wykresie.
+# d)
+
+dane4 <- cbind(dane3, pam1$clustering)
+names(dane4)[[10]] <- "clustering"
+dane4$clustering <- as.factor(dane4$clustering)
+ggpairs(dane4,aes(col=clustering)) # dane z jednej z grup wyróżnia podobieństwo do podziału wg diabetes
+# Są one w pewnym stopniu przerysowane - różnice w age, glucose, czy pregnant są bardziej widoczne
+
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty[as.numeric(etykietkipam1)],
+     xlab="PCA1",ylab="PCA2",main=c("PAM","wykres rozrzutu po redukcji wymiarów"))
+points((pca$x)[medoidy,1],(pca$x)[medoidy,2],col="green",pch=16,cex=1.5)
+legend("bottomright",col=c("black","red","grey","grey"), pch=c(16,16,1,2),legend = c("neg","pos","pam1","pam2"), cex=0.8, bg="navajowhite")
+
+medoidy.info <- dane3[medoidy,]
+# Medoidy wyróżniają się - wysokim wiekiem, jeden z nich niską masą i mnogością ciąż.
+
+
+dane5 <- cbind(dane3,agnescompk5)
+names(dane5)[10] <- "clustering2"
+dane5$clustering2 <- as.factor(dane5$clustering2)
+dane6 <- dane5[which(dane5$clustering2 != 3&dane5$clustering2!=4&dane5$clustering2!=5),]
+ggpairs(dane6,aes(col=clustering2))
+
+agnesavgk5 <- cutree(agnesavg,k=5)
+kształty3 <- c(1,2,3,4,5)
+plot(pca$x[,1],pca$x[,2],col=kolory[as.numeric(dane3$diabetes)],pch=kształty3[as.numeric(agnesavgk5)],
+     xlab="PCA1",ylab="PCA2",main=c("Agnes - Average","wykres rozrzutu po skalowaniu wielowymiarowym", "5 klastrów"))
+legend("bottomright",col=c("black","red","grey","grey","grey","grey","grey"),
+       pch=c(16,16,1,2,3,4,5),legend = c("neg","pos","agnes1","agnes2","agnes3","agnes4","agnes5"), bg="navajowhite", cex=0.7)
+
+tab5 <- xtable(medoidy.info, digits = 3, row.names = F, caption = "Cechy medoidów", label = "tabela5")
+print(tab5, type = "latex", table.placement = "H", comment=FALSE)
+# Z otrzymanych klastrów tylko 2 są większych rozmiarów i nieszczególnie się wyróżniają
+```
+Obie badane metody nie poradziły sobie dobrze jeśli chodzi o zestawienie z oryginalnymi etykietkami - ledwo (w najlepszym wypadku) udało im się osiągnąć poziom skuteczności związany z przydzieleniem wszystkich przypadków do większej kategorii. Klastry uzyskane za pomocą algorytmu agnes cechowały się wyższymi wartościami silhouette, co sugeruje lepszą zwartość i separację, lecz analiza wykresów składowych głównych podsuwa odwrotne wnioski. W przypadku algorytmu agnes dopiero przy ok. pięciu klastrach pojawiały się liczniejsze grupy. W związku z tym - i wcześniejszymi wykresami - oceniam, że optymalną liczbą klastrów dla agnes jest 5, a metodą - odległość średnia. Algorytm PAM daje najlepsze efekty zarówno pod kątem silhouette, jak i zgodności dla dwóch klastrów. Medoidy zdają się znajdować w centrum klastrów, jednak ciężko dostrzec coś szczególnego, jeśli chodzi o wartości ich cech.

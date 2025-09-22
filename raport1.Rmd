@@ -1,0 +1,154 @@
+---
+title: "Lista 1"
+subtitle: "Eksploracja danych"
+author: "Olaf Masłowski nr ablumu 277543"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage[OT4]{polski}
+   - \usepackage[utf8]{inputenc}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+output: 
+  pdf_document:
+    toc: true
+    fig_caption: yes
+    fig_width: 5 
+    fig_height: 4 
+    number_sections: true
+fontsize: 12pt 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(kableExtra)
+library(xtable)
+library(GGally)
+```
+
+\newpage
+
+# Analiza opisowa - Telco Customer churn
+
+Będziemy analizować zbiór danych WA_Fn-UseC\_-Telco-Customer-Churn.csv zawierający informacje o klientach pewnej firmy telekomunikacyjnej. Wykorzystamy metody analizy opisowej do poznania podstawowych własności danych. Przede wszystkim zbadamy miary położenia i rozproszenia poszczególnych zmiennych, oraz przedstawimy dane na histogramach i wykresach pudełkowych (zmienne ilościowe), lub wykresach słupkowych (zmienne jakościowe),
+
+Dane zawierają informacje takie jak:
+
+-   płeć
+-   czy klient jest osobą starszą?
+-   czy klient ma partnera/partnerkę?
+-   czy klient utrzymuje inne osoby?
+-   od jak dawna dostarczana jest usługa (Tenure)?
+-   jakie usługi otrzymuje?
+-   metoda płatności
+-   rodzaj umowy
+-   wartość miesięcznych transakcji
+-   Łączna wartość transakcji
+-   czy klient odszedł w ostatnim miesiącu (Churn)?
+
+# Etap 1 - przygotowanie danych
+
+```{r Etap 1, echo=FALSE,results=FALSE}
+dane <- read.csv(file="WA_Fn-UseC_-Telco-Customer-Churn.csv", stringsAsFactors = TRUE)
+#head(dane)# Braki danych w kolumnie TotalCharges wynikają z zerowego Tenure - nie było jeszcze miesiąca rozliczeniowego
+#str(dane) # Kolumna ID niepotrzebnie ma typ factor, ale i tak zostanie usunięta
+wymiary <- dim(dane)
+przypadki <- wymiary[1]
+cechy <- wymiary[2]
+dane <- dane %>% mutate(customerID = NULL, SeniorCitizen=as.factor(SeniorCitizen))
+str(dane)
+# Oprócz tego za braki danych można uznać np "No internet service" w wielu kolumnach
+# Nietytpowe jest kodowanie części wartości logicznych za pomocą "yes"/"no", części 0/1
+dane$TotalCharges[is.na(dane$TotalCharges)] <- 0
+
+```
+
+Dane zawierają `r przypadki` przypadków i `r cechy` cech. Braki danych występują dla cechy **Charges** i wynikają z faktu, że dany klient jest klientem zbyt krótko i jeszcze się nie rozliczał - wartość Tenure wynosi 0. Oprócz tego za braki danych można uznać np "no internet service" w przypadku cech odnoszących się do dodatkowych usług internetowych.
+
+# Etap 2 - analiza opisowa
+
+```{r Etap 2, fig.cap=c("Wykresy słupkowe interesujących zmiennych","Wykresy pudełkowe zmiennych ciągłych","Histogramy zmiennych ciągłych", "Wykresy rozrzutu"), echo=FALSE,fig.height=3,results='asis'}
+dane_stand <- dane[,c("tenure","MonthlyCharges", "TotalCharges")]
+dane_stand$tenure <- scale(dane_stand$tenure)
+dane_stand$MonthlyCharges <- scale(dane_stand$MonthlyCharges)
+dane_stand$TotalCharges <- scale(dane_stand$TotalCharges)
+wskazniki <- function(X, nazwa="") {
+  if (is.numeric(X)) {
+    par(mfrow=c(1,2))
+    wynik <- c(min(X),quantile(X,0.25), median(X), mean(X), quantile(X,0.75), max(X), var(X), sd(X), IQR(X))
+    names(wynik) <- c("min", "Q1", "median", "mean", "Q3", "max", "var", "sd", "IQR")
+    #boxplot(X, main=nazwa, xlab = NULL, col="firebrick",ylim=c(min(X)-sqrt(max(X)),1.1*max(X)))
+    #hist(X,main=NULL,xlab = NULL, col="firebrick",ylim=c(0,2000))
+    #par(mfrow=c(1,1))
+    return(wynik)
+  } else {
+    wynik <- table(X)
+    #par(mar=c(11,4,4,4))
+    #plot(X,main=nazwa,xlab = NULL,col="firebrick", las=2)
+    #par(mar=c(4,4,4,4))
+    return(wynik)
+  }
+}
+par(mfrow=c(1,3))
+
+plot(dane$PhoneService, main = "Phone service",ylim=c(0,6500), las=2)
+plot(dane$InternetService, main = "Internet service",ylim=c(0,6500),las=2)
+plot(dane$Churn, main = "Churn",ylim=c(0,6500),kas=2)
+
+boxplot(dane$tenure,main="Tenure")
+boxplot(dane$MonthlyCharges,main="Monthly charges")
+boxplot(dane$TotalCharges, main="Total charges")
+
+hist(dane$tenure,main="Tenure",ylim=c(0,2000),xlab="",breaks=10)
+hist(dane$MonthlyCharges,main="Monthly charges",ylim=c(0,2000),xlab="",breaks=10)
+hist(dane$TotalCharges, main="Total charges",ylim=c(0,2000),xlab="",breaks=10)
+par(mfrow=c(1,1))
+
+pairs(dane[,sapply(dane,is.numeric)])
+tabelki <- lapply(1:dim(dane)[2],function(x) wskazniki(dane[[x]], nazwa=paste0("wykres ",as.character(x),": ",colnames(dane)[x])))
+miary <- tabelki[c(5,18,19)]
+df <- data.frame(tenure=miary[[1]],MonthlyCharges=miary[[2]],TotalCharges=miary[[3]])
+tab1 <- xtable( as.matrix(df), digits = 3, row.names = TRUE, caption = "Miary położenia rozproszenia", label = "tabela1")
+print(tab1, type = "latex", table.placement = "H", comment=FALSE)
+max_tenure <- max(dane$tenure)
+max_mc <- max(dane$MonthlyCharges)
+max_tc <- max(dane$TotalCharges)
+```
+Cechy tenure, MonthlyCharges i TotalCharges mieszczą się w przedziałach od 0, do odpowiednio `r max_tenure`, `r max_mc` i `r max_tc`. Zmienne ciągłe nie rozkładają się symetricznie, najbliżej symetrii jest MonthlyCharges. TotalCharges charakteryzuje się dużą zmiennością z największymi obserwacjami wielokrotnie większymi, niż mediana.  
+Można zaobserować, że popularniejsze wśród klientów są usługi związane z dostarczaniem telefonii, niż internetu. Istotna część klientów zrezygnowała w ciągu ostatniego miesiąca. Łączne zyski rosną zależnie od czasu dostarczania usługi i miesiącznych płatności, co nie powinno być zaskoczeniem. "Stali" klienci mogą mieć nieznacznie wyższe płatności niż nowi.
+
+# Etap 3 - analiza ze względu na Churn
+
+```{r etap 3.1, echo=FALSE, results='asis',fig.height=8, fig.width=7, fig.cap="zestawienie wykresów dla istotnych zmiennych"}
+churn <- dane %>% filter(Churn == "Yes")
+no_churn <- dane %>% filter(Churn == "No")
+tabelki2 <- lapply(1:dim(dane)[2],function(x) wskazniki(churn[[x]], nazwa=paste0("wykres ",as.character(x),": ",colnames(dane)[x])))
+tabelki3 <- lapply(1:dim(dane)[2],function(x) wskazniki(no_churn[[x]], nazwa=paste0("wykres ",as.character(x),": ",colnames(dane)[x])))
+
+miary2 <- tabelki2[c(5,18,19)]
+miary3 <- tabelki3[c(5,18,19)]
+
+ggpairs(dane[,c("PhoneService","InternetService","tenure","MonthlyCharges","Churn")],aes(col=Churn)) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r etap3.2, echo=FALSE, results='asis',fig.height=6, fig.width=6, fig.cap="wykresy pudełkowe dla zmiennych tenure i monthly charges ze względu na churn"}
+boxplot(churn$tenure,no_churn$tenure, churn$MonthlyCharges,no_churn$MonthlyCharges, col=c("black","firebrick","green","blue"))
+legend("topleft",col=c("black","firebrick","green","blue"),
+       legend=c('tenure - churn','tenure - no churn','MonthlyCharges - churn', 'MonthlyCharges - no churn'),cex=0.8, bg = "navajowhite",pch=16)
+
+df2 <- data.frame(tenure=miary2[[1]],MonthlyCharges=miary2[[2]],TotalCharges=miary2[[3]])
+df3 <- data.frame(tenure=miary3[[1]],MonthlyCharges=miary3[[2]],TotalCharges=miary3[[3]])
+tab2 <- xtable( as.matrix(df2), digits = 3, row.names = TRUE, caption = "Miary położenia rozproszenia - churn", label = "tabela2")
+tab3 <- xtable( as.matrix(df2), digits = 3, row.names = TRUE, caption = "Miary położenia rozproszenia - no churn", label = "tabela3")
+print(tab2, type = "latex", table.placement = "H", comment=FALSE)
+print(tab3, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+# Etap 4 - podsumowanie
+Firma oferuje szeroki wachlarz usług w różnych cenach.
+
+Z wcześniejszych wykresów i analiz możemy zaobserwować, że znacząca część klientów, to klienci wieloletni. Większą część usług stanowią usługi telefoniczne
+
+Z wykresów możemy odczytać, że odchodzili (Churn) przede wszystkim osoby nie będące klientami od dawna i mające wysokie płatności. Ponadto szczególnie dużo z rezygnujących klientów korzystało ze światłowodu. Zatem firma powinna skupić się przede wszystkim na jakości high-endowych usług i utrzymaniu nowych klientów.

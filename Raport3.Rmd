@@ -1,0 +1,677 @@
+---
+title: "Raport 3"
+subtitle: "Eksploracja danych"
+author: "Olaf Masłowski, album 277543"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage[OT4]{polski}
+   - \usepackage[utf8]{inputenc}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+output: 
+  pdf_document:
+    toc: true
+    fig_caption: yes
+    fig_width: 5 
+    fig_height: 4 
+    number_sections: true
+fontsize: 12pt 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+knitr::opts_chunk$set(cache = TRUE)
+library(mlbench)
+library(GGally)
+library(ipred)
+library(klaR)
+library(xtable)
+library(rpart)
+library(rpart.plot)
+```
+
+\newpage
+
+# Wstęp
+
+Ponieważ klasyfikacja danych Iris na bazie modelu regresji liniowej była wykonana w jednym z plików na eportalu - jak mniemam plik ten został udostępniony już po terminie oddania raportu - zdecydowałem się znaleźć podobne dane i wykonać zadanie dla nich. [Dane seeds](https://archive.ics.uci.edu/dataset/236/seeds) zawierają informacje o ziarnach trzech odmian pszenicy takie jak:
+
+* Powierzhnia
+* Obwód
+* Ścisłość
+* Długość ziarna
+* Szerokość ziarna
+* Współczynnik asymetrii
+* Długość rowka ziarna (?)
+
+Wszystkie cechy są ciągłe.
+
+# Klasyfikacja na bazie modelu regresji liniowej
+
+Wykorzystamy regresję liniową do wyznaczenia "prawdopodobieństw", że dany przypadek należy do danej kategorii, a następnie dla każdego przypadku wybierzemy tę kategorię, którą przyjmuje z największym prawdopodobieństwem.
+
+## Model z podstawowymi czynnikami
+
+```{r regresja1, echo=F, results='asis', fig.cap="Zestawienie istotnych wykresów",fig.height=7,fig.width=7}
+# Wczytuję dane
+seeds.test <- read.delim("~/ED/seeds_dataset.txt", header=FALSE)
+
+# Przypisuję nazwy
+names(seeds.test) <- c("area",
+                  "perimeter"
+                  ,"compactness",
+                  "kernel_length",
+                  "kernel_width",
+                  "assymetry",
+                  "kernel_groove",
+                  "species")
+
+seeds.factor <- seeds.test
+seeds.factor$species <- as.factor(seeds.factor$species)
+ggpairs(seeds.factor, aes(col=species,alpha=0.9)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_text(size=5))
+
+przypadki <- dim(seeds.test)[[1]]
+
+# Zbiór uczący i testowy
+
+set.seed(472025)
+training <- sample.int(przypadki, round(0.66*przypadki))
+seeds <- seeds.test[training,]
+
+przypadki.train <- dim(seeds)[[1]]
+
+seeds.test <- seeds.test[-training,]
+
+przypadki.test <- dim(seeds.test)[[1]]
+
+# Zmienne 0-1 odpowiadające klasom
+
+y1 <- rep(1,przypadki.train)
+y2 <- y1
+y3 <- y1
+
+y1[seeds$species!= 1] = 0
+y2[seeds$species!= 2] = 0
+y3[seeds$species!= 3] = 0
+
+y1t <- rep(1,przypadki.test)
+y2t <- y1t
+y3t <- y1t
+
+y1t[seeds.test$species!= 1] = 0
+y2t[seeds.test$species!= 2] = 0
+y3t[seeds.test$species!= 3] = 0
+
+z <- runif(przypadki.train)
+
+```
+
+```{r regresja 2, echo=F, results='asis',fig.cap="wykres rozrzutu U(0,1)~area z podziałem na kategorie. pred - klasyfikacja przez model. species - prawdziwa etykietka", dependson="regresja1"}
+
+
+# Ramki danych z dodanymi zmiennymi powyżej
+
+seeds1 <- cbind(seeds[,1:7],y1)
+seeds2 <- cbind(seeds[,1:7],y2)
+seeds3 <- cbind(seeds[,1:7],y3)
+
+seeds1t <- cbind(seeds.test[,1:7],y1t)
+seeds2t <- cbind(seeds.test[,1:7],y2t)
+seeds3t <- cbind(seeds.test[,1:7],y3t)
+
+# model
+
+seeds1.lm <- lm(y1~., data=seeds1)
+seeds2.lm <- lm(y2~., data=seeds2)
+seeds3.lm <- lm(y3~., data=seeds3)
+
+# Predykcja - prawdopodobieństwa należenia do danej klasy
+
+pred1.lm  <- predict(seeds1.lm, seeds1)
+pred2.lm  <- predict(seeds2.lm, seeds2)
+pred3.lm  <- predict(seeds3.lm, seeds3)
+
+# predykcja - wybranie najbardziej prawdopodobnej klasy
+
+pred <- rep(1, length(pred1.lm) )
+pred[pred2.lm > pmax(pred1.lm,pred3.lm)] = 2
+pred[pred3.lm > pmax(pred1.lm,pred2.lm)] = 3
+
+# predykcja dla zbioru testowego
+
+pred1.lm.t  <- predict(seeds1.lm, seeds1t)
+pred2.lm.t  <- predict(seeds2.lm, seeds2t)
+pred3.lm.t  <- predict(seeds3.lm, seeds3t)
+
+predt <- rep(1, length(pred1.lm.t) )
+predt[pred2.lm.t > pmax(pred1.lm.t,pred3.lm.t)] = 2
+predt[pred3.lm.t > pmax(pred1.lm.t,pred2.lm.t)] = 3
+
+conf.matrix <- as.matrix(table(pred, seeds$species))
+accuracy <- sum(diag(conf.matrix))/sum(conf.matrix)
+
+conf.matrix.t <- as.matrix(table(predt, seeds.test$species))
+accuracy.t <- sum(diag(conf.matrix.t))/sum(conf.matrix.t)
+
+tab1 <- xtable(conf.matrix, digits = 3, row.names = TRUE, caption = "Macierz pomyłek na zbiorze uczącym", label = "tabela1")
+
+
+tab2 <- xtable(conf.matrix.t, digits = 3, row.names = TRUE, caption = "Macierz pomyłek na zbiorze testowym", label = "tabela2")
+
+seeds2 <- cbind(seeds,pred,z)
+seeds2$species <- as.factor(seeds2$species)
+seeds2$pred <- as.factor(seeds2$pred)
+
+ggplot(seeds2, aes(x=area,y=z, col=species, shape=pred)) + geom_point(size=2) + ggtitle("Wykres rozrzutu dla danych uczących") + labs(y="U(0,1)")
+print(tab1, type = "latex", table.placement = "H", comment=FALSE)
+print(tab2, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Wobec wykresów (rys. 1) zdolnością dyskryminacyjną wyróżnia się zmienna area. Błąd klasyfikacji wyniósł `r 1 - accuracy` na zbiorze uczącym i `r 1-accuracy.t` na zbiorze testowym. Zjawisko maskowania klas nie wystąpiło w istotnym stopniu - klasy mają podobną liczność i dostatecznie się od siebie różnią.
+
+## Model z czynnikami wielomianowymi drugiego stopnia
+
+Do utworzenia ramki danych z czynnikami wielomianowymi napisałem poniższą funkcję:
+
+```{r regresja3, echo=T}
+# Z wielomianami
+
+wielomian <- function(df) {
+  cechy <- dim(df)[[2]]
+  df2 <- df
+  n=1
+  for (x in 1:cechy) {
+    for (y in x:cechy) {
+      W <- df[,x] * df[,y]
+      df2 <- cbind(df2,W)
+      names(df2)[cechy + n] <- paste0("w",as.character(n))
+      n = n + 1
+    }
+  }
+  return(df2)
+}
+```
+
+```{r regresja4, echo=F,dependson="regresja1", results='asis'}
+# Dodanie składników wielomianowych
+
+seeds.w <- wielomian(seeds[,1:7])
+seeds.w.t <- wielomian(seeds.test[,1:7])
+
+seeds.w1 <- cbind(seeds.w,y1)
+seeds.w2 <- cbind(seeds.w,y2)
+seeds.w3 <- cbind(seeds.w,y3)
+
+seeds.w1t <- cbind(seeds.w.t,y1t)
+seeds.w2t <- cbind(seeds.w.t,y2t)
+seeds.w3t <- cbind(seeds.w.t,y3t)
+
+# model
+
+seeds.w1.lm <- lm(y1~., data=seeds.w1)
+seeds.w2.lm <- lm(y2~., data=seeds.w2)
+seeds.w3.lm <- lm(y3~., data=seeds.w3)
+
+# predykcja - prawdopodobieństwa
+
+pred.w1.lm  <- predict(seeds.w1.lm, seeds.w1)
+pred.w2.lm  <- predict(seeds.w2.lm, seeds.w2)
+pred.w3.lm  <- predict(seeds.w3.lm, seeds.w)
+
+# predykcja - wybranie największego prawdopodobieństwa
+predw <- rep(1, przypadki.train)
+predw[pred.w2.lm > pmax(pred.w1.lm,pred.w3.lm)] = 2
+predw[pred.w3.lm > pmax(pred.w1.lm,pred.w2.lm)] = 3
+
+# dla zbioru testowego
+
+pred.w1.lm.t  <- predict(seeds.w1.lm, seeds.w1t)
+pred.w2.lm.t  <- predict(seeds.w2.lm, seeds.w2t)
+pred.w3.lm.t  <- predict(seeds.w3.lm, seeds.w3t)
+
+predwt <- rep(1, przypadki.test)
+predwt[pred.w2.lm.t > pmax(pred.w1.lm.t,pred.w3.lm.t)] = 2
+predwt[pred.w3.lm.t > pmax(pred.w1.lm.t,pred.w2.lm.t)] = 3
+
+# tabela pomyłek (ang. confusion matrix)
+conf.matrix2 <- as.matrix(table(predw, seeds$species))
+accuracy2 <- sum(diag(conf.matrix2))/sum(conf.matrix2)
+
+conf.matrix2.t <- as.matrix(table(predwt, seeds.test$species))
+accuracy2.t <- sum(diag(conf.matrix2.t))/sum(conf.matrix2.t)
+
+seeds.w2 <- cbind(seeds,predw,z)
+seeds.w2$species <- as.factor(seeds2$species)
+seeds.w2$pred <- as.factor(seeds2$pred)
+
+ggplot(seeds2, aes(x=area,y=z, col=species, shape=pred)) + geom_point(size=2) + ggtitle("Wykres rozrzutu dla danych uczących") + labs(y="U(0,1)")
+
+# Większa ilość zmiennych objaśniających niż w iris zwiększyła
+# dokładność klasyfikacji z wykorzystaniem regresji do poziomu, w którym
+# zyski z korzstania ze składników wielomianowych są pomijalne, lub
+# zależności od wybranego podzbioru uczącego nawet obniżają dokładność.
+
+tab3 <- xtable(conf.matrix2, digits = 3, row.names = TRUE, caption = "Macierz pomyłek na zbiorze uczącym", label = "tabela3")
+
+
+tab4 <- xtable(conf.matrix2.t, digits = 3, row.names = TRUE, caption = "Macierz pomyłek na zbiorze testowym", label = "tabela4")
+
+print(tab3, type = "latex", table.placement = "H", comment=FALSE)
+print(tab4, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Błąd klasyfikacji na zbiorze uczącym wyniósł `r round(1-accuracy2,3)`, na zbiorze testowym `r round(1-accuracy2.t,3)`. Moje przypuszczenia dotyczące dokładności powyższych algorytmów są następujące: ze względu na większą ilość zmiennych objaśniających o dobrych zdolnościach dykryminacyjnych (w porównaniu z danymi Iris), standardowa regresja była dostatecznie dobra i czynniki wielomianowe wprowadziły jedynie dodatkowy szum objawiający się przede wszystkim na zbiorze testowym.
+
+\newpage
+
+# Zadanie 2 - porównanie metod klasyfikacji
+
+Zastosujemy poznane metody klasyfikacji - k-najbliższych sąsiadów, drzewa klasyfikacyjne i naiwny klasyfikator bayesowski - do danych PimaIndiansDiabetes (Nie zwróciłem uwagi na "2", ale według mej najlepszej wiedzy i tak doprowadziłem dane do stanu jak w "drugiej edycji").
+
+## Zapoznanie się z danymi i wstępna analiza danych
+
+```{r dane, echo=FALSE, fig.cap="wykresy pudełkowe zmiennych ilościowych"}
+data("PimaIndiansDiabetes")
+dane <- PimaIndiansDiabetes
+#str(dane)
+#?PimaIndiansDiabetes
+# usuwam podejrzane zera # Przez pomyłkę wybrałem standardową wersję (bez 2 na końcu),
+# ale z tego co mi wiadomo, róznica polega na zamianie podejrzanych zer w NA
+
+dane <- dane[-c(which(dane$glucose==0),
+       which(dane$pressure==0),
+       which(dane$triceps==0),
+       which(dane$insulin==0),
+       which(dane$mass==0)
+       ),
+     ]
+blad1klasy <- length(which(dane$diabetes=="pos"))/dim(dane)[[1]]
+boxplot(dane[,-9])
+dane[,-9] <- scale(x=dane[,-9],center=TRUE,scale=TRUE)
+# Największą zdolność dyskryminacyjną zdają się mieć zmienne glucose, oraz age
+
+# Zbiór testowy i treningowy
+
+trainsample <- sample(1:dim(dane)[[1]],round(0.66*dim(dane)[[1]]))
+trainset <- dane[trainsample,]
+testset <- dane[-trainsample,]
+
+ntrain <- dim(trainset)[[1]]
+ntest <- dim(testset)[[1]]
+
+ztrain <- runif(ntrain)
+ztest <- runif(ntest)
+```
+
+```{r wykresggpairs1, echo=FALSE, fig.height=8,fig.width=8,fig.cap="Zestawienie istotnych wykresów dla PimaIndianDiabetes", dependson="dane"}
+ggpairs(dane, aes(col=diabetes, alpha=0.95))
+```
+Dane zawierają następujące informacje:
+
+* Ilość przebytych ciąż
+* Poziom glukozy
+* Ciśnienie krwi
+* Grubość skóry na tricepsie
+* Poziom insuliny
+* BMI
+* DPF (diabetes pedigree function)
+* Wiek
+* Cukrzyca (wynik testu)
+
+Przypisanie wszystkich przypadków do największyej klasy poskutkowałoby błędem `r round(blad1klasy,3)`. Wykresy pudełkowe (rys. 3) sugerują konieczność przeprowadzenia standaryzacji. Najlepszą zdolność dyskryminacyjną zdają się mieć cechy _glucose_ i _age_ (rys. 4).
+
+## Metoda k-najbliższych sąsiadów
+
+```{r knn, echo=FALSE,results='asis', dependson="dane", fig.cap="Wykres rozrzutu dla k=15, zmiennych glucose i age. Grupowanie wg rzeczywistej etykietki i klasyfikacji k-nn"}
+# K najbliższych sąsiadów
+
+# modele dla różnych k
+
+knn1 <- ipredknn(diabetes~.,data=trainset,k=1)
+knn2 <- ipredknn(diabetes~.,data=trainset,k=5)
+knn3 <- ipredknn(diabetes~.,data=trainset,k=15)
+knn4 <- ipredknn(diabetes~.,data=trainset,k=30)
+
+# predykcje dla różnych k
+
+knnpred1 <- predict(knn1,trainset, type="class")
+knnmac1 <- table(knnpred1,trainset$diabetes)
+knnerr1 <- (ntrain - sum(diag(knnmac1)))/ntrain
+
+knnpred2 <- predict(knn2,trainset, type="class")
+knnmac2 <- table(knnpred2,trainset$diabetes)
+knnerr2 <- (ntrain - sum(diag(knnmac2)))/ntrain
+
+knnpred3 <- predict(knn3,trainset, type="class")
+knnmac3 <- table(knnpred3,trainset$diabetes)
+knnerr3 <- (ntrain - sum(diag(knnmac3)))/ntrain
+
+knnpred4 <- predict(knn4,trainset, type="class")
+knnmac4 <- table(knnpred4,trainset$diabetes)
+knnerr4 <- (ntrain - sum(diag(knnmac4)))/ntrain
+
+# Na zbiorze testowym
+
+knnpred1.t <- predict(knn1,testset, type="class")
+knnmac1.t <- table(knnpred1.t,testset$diabetes)
+knnerr1.t <- (ntest - sum(diag(knnmac1.t)))/ntest
+
+knnpred2.t <- predict(knn2,testset, type="class")
+knnmac2.t <- table(knnpred2.t,testset$diabetes)
+knnerr2.t <- (ntest - sum(diag(knnmac2.t)))/ntest
+
+knnpred3.t <- predict(knn3,testset, type="class")
+knnmac3.t <- table(knnpred3.t,testset$diabetes)
+knnerr3.t <- (ntest - sum(diag(knnmac3.t)))/ntest
+
+knnpred4.t <- predict(knn4,testset, type="class")
+knnmac4.t <- table(knnpred4.t,testset$diabetes)
+knnerr4.t <- (ntest - sum(diag(knnmac4.t)))/ntest
+
+
+# k = 15 zdaje się być "wystarczająco" dobre
+
+# predykcje dla k = 15, zmiennych glucose i age
+
+knn5 <- ipredknn(diabetes~glucose + age,data=trainset,k=15)
+
+knnpred5 <- predict(knn5,testset, type="class")
+knnmac5 <- table(knnpred5,testset$diabetes)
+knnerr5 <- (ntest - sum(diag(knnmac5)))/ntest
+
+# k = 15, zmienne glucose, age, insulin, pregnant
+
+knn6 <- ipredknn(diabetes~glucose + age + insulin + pregnant,data=trainset,k=15)
+
+knnpred6 <- predict(knn6,testset, type="class")
+knnmac6 <- table(knnpred6,testset$diabetes)
+knnerr6 <- (ntest - sum(diag(knnmac6)))/ntest
+
+# zapożyczone z cross_validation_przykład.R (eportal)
+
+my.predict  <- function(model, newdata) predict(model, newdata=newdata, type="class")
+my.ipredknn <- function(formula1, data1, ile.sasiadow) ipredknn(formula=formula1,data=data1,k=ile.sasiadow)
+
+error1 <- errorest(diabetes ~ glucose + age, dane, model=my.ipredknn, predict=my.predict, estimator="cv",     
+         est.para=control.errorest(k = 10), ile.sasiadow=15)
+error2 <- errorest(diabetes ~ ., dane, model=my.ipredknn, predict=my.predict, estimator="cv",     
+          est.para=control.errorest(k = 10), ile.sasiadow=15)
+
+tabelkabledowknn <- as.data.frame(cbind(parametry = c("train, k=1, all","train, k=5, all","train, k=15, all","train, k=30, all","test, k=1, all","test, k=5, all","test, k=15, all","test, k=30, all","test, k=15, g+a", "test, k=15, g + a + i","crossvalidation, k=15,g+a","crossvalidation, k=15, all"),
+                       bledy=c(knnerr1,knnerr2,knnerr3,knnerr4,knnerr1.t,knnerr2.t,knnerr3.t,knnerr4.t, knnerr5, knnerr6,error1$error,error2$error)))
+
+tabelkabledowknn$bledy <- as.numeric(tabelkabledowknn$bledy)
+daneknn <- cbind(testset,knnpred5[1:ntest],ztest)
+names(daneknn)[10] <-"knn"
+
+ggplot(daneknn,aes(x=glucose,y=ztest,col=diabetes,shape=knn)) + geom_point() + ggtitle("Wykres rozrzutu z grupowaniem")
+
+
+
+tab5 <- xtable(tabelkabledowknn, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji. W pierwszej kolumnie informacje zakodowane: test/train - zbiór testowy/uczący, k - parametr algorytmu, all - wykorzystano wszystkie cechy, g - glucose, a - age, i - insulin", label = "tabela5")
+
+print(tab5, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Ze względu na próby dla wielu parametrów, macierze pomyłek nie są uwzględnione w raporcie - można je znaleźć w pliku .Rmd. Błędy dla małych k są zauważalnie niższe na zbiorze testowym, zatem algorytm może w takich wypadkach być podatny na przeuczenie.
+
+## Drzewa klasyfikacyjne
+
+```{r tree, echo=FALSE, dependson="dane", results='asis', fig.cap=c("Drzewo klasyfikacyjne dla cp = .01 i wszystkich zmiennych. Zachęcam do przybliżenia","Wykres xerror-rozmiar drzewa. Jego zadaniem jest pomoc w ustaleniu optymalnego rozmiaru drzewa zgodnie z regułą 1SE","Optymalnie przycięte drzewo","Optymalnie przycięte drzewo dla cp = .02 i wszystkich zmiennych","Optymalnie przycięte drzewo dla cp = .02 i zmiennych glucose, oraz age (akurat takie samo jak pierwsze)","Wykres rozrzutu dla cp=.02, , minsplit=5, maxdepth=20, zmiennych glucose i age. Grupowanie wg rzeczywistej etykietki i klasyfikacji metodą drzew klasyfikacyjnych")}
+# Drzewa klasyfikacyjne
+
+model1 <- diabetes ~.
+model2 <- diabetes ~ glucose + age
+
+# model
+
+set.seed(123)
+tree1 <- rpart(model1, data = trainset,
+               control=rpart.control(cp=.01, minsplit=5, maxdepth=20))
+rpart.plot(tree1)
+
+plotcp(tree1)
+#printcp(tree1)
+
+# ustalam cp dla najmniejszego błędu kroswalidacyjnego
+
+bestcp1 <- tree1$cptable[which.min(tree1$cptable[,"xerror"]),"CP"]
+val1 <- tree1$cptable[which.min(tree1$cptable[,"xerror"]),"xerror"] +
+  tree1$cptable[which.min(tree1$cptable[,"xerror"]),"xstd"]
+
+# znajduję najmniejsze drzewo zgodnie z regułą 1SE
+
+s1SE1 <- which.min((tree1$cptable[tree1$cptable[,"xerror"] <= val1,])[,"nsplit"])
+valid1 <- as.data.frame(tree1$cptable[tree1$cptable[,"xerror"] <= val1,])
+cp1 <- valid1[which.min(valid1$nsplit),"CP"]
+tree1pruned <- prune(tree1,cp=cp1)
+
+rpart.plot(tree1pruned)
+
+# predykcje
+
+predtreetrain1 <- predict(tree1pruned, newdata=trainset, type = "class")
+predtreetest1 <- predict(tree1pruned, newdata=testset, type = "class")
+
+# macierze odmienności
+
+conftreetrain1 <- table(trainset$diabetes, predtreetrain1)
+conftreetest1 <- table(testset$diabetes, predtreetest1)
+
+# błędy
+
+acctreetrain1 <- (ntrain - sum(diag(conftreetrain1)))/ntrain
+acctreetest1 <- (ntest - sum(diag(conftreetest1)))/ntest
+
+# inne cp w parametrach
+
+set.seed(123)
+tree2 <- rpart(model1, data = trainset,
+               control=rpart.control(cp=.02, minsplit=10, maxdepth=20))
+#rpart.plot(tree2)
+
+#plotcp(tree2)
+
+
+
+bestcp2 <- tree2$cptable[which.min(tree2$cptable[,"xerror"]),"CP"]
+val2 <- tree2$cptable[which.min(tree2$cptable[,"xerror"]),"xerror"] +
+  tree2$cptable[which.min(tree2$cptable[,"xerror"]),"xstd"]
+
+
+s2SE1 <- which.min((tree2$cptable[tree2$cptable[,"xerror"] <= val2,])[,"nsplit"])
+valid2 <- as.data.frame(tree2$cptable[tree2$cptable[,"xerror"] <= val2,])
+cp2 <- valid2[which.min(valid2$nsplit),"CP"]
+tree2pruned <- prune(tree2,cp=cp2)
+
+rpart.plot(tree2pruned)
+
+
+predtreetrain2 <- predict(tree2pruned, newdata=trainset, type = "class")
+predtreetest2 <- predict(tree2pruned, newdata=testset, type = "class")
+
+
+conftreetrain2 <- table(trainset$diabetes, predtreetrain2)
+conftreetest2 <- table(testset$diabetes, predtreetest2)
+
+
+acctreetrain2 <- (ntrain - sum(diag(conftreetrain2)))/ntrain
+acctreetest2 <- (ntest - sum(diag(conftreetest2)))/ntest
+
+# model opierający się na zmiennych glucose i age
+
+set.seed(123)
+tree3 <- rpart(model2, data = trainset,
+               control=rpart.control(cp=.02, minsplit=5, maxdepth=20))
+#rpart.plot(tree3)
+
+#plotcp(tree3)
+
+
+
+bestcp3 <- tree3$cptable[which.min(tree3$cptable[,"xerror"]),"CP"]
+val3 <- tree3$cptable[which.min(tree3$cptable[,"xerror"]),"xerror"] +
+  tree3$cptable[which.min(tree3$cptable[,"xerror"]),"xstd"]
+
+
+s3SE1 <- which.min((tree3$cptable[tree3$cptable[,"xerror"] <= val3,])[,"nsplit"])
+valid3 <- as.data.frame(tree3$cptable[tree3$cptable[,"xerror"] <= val3,])
+cp3 <- valid3[which.min(valid3$nsplit),"CP"]
+tree3pruned <- prune(tree3,cp=cp3)
+
+rpart.plot(tree3pruned)
+
+
+predtreetrain3 <- predict(tree3pruned, newdata=trainset, type = "class")
+predtreetest3 <- predict(tree3pruned, newdata=testset, type = "class")
+
+
+conftreetrain3 <- table(trainset$diabetes, predtreetrain3)
+conftreetest3 <- table(testset$diabetes, predtreetest3)
+
+
+acctreetrain3 <- (ntrain - sum(diag(conftreetrain3)))/ntrain
+acctreetest3 <- (ntest - sum(diag(conftreetest3)))/ntest
+
+my.predict2  <- function(model, newdata) {
+  predict(model, newdata=newdata, type="class")}
+my.ipredtree <- function(formula1, data1, mycp, split, depth) rpart(formula=formula1,data=data1,cp=mycp,minsplit=split,maxdepth=depth)
+
+error3 <- errorest(model2, dane, model=my.ipredtree, predict=my.predict2, estimator="boot",   
+         est.para=control.errorest(nboot = 50), mycp=0.02,split=5,depth=20)
+error4 <- errorest(model1, dane, model=my.ipredtree, predict=my.predict2, estimator="boot",   
+         est.para=control.errorest(nboot = 50), mycp=0.01,split=5,depth=20)
+
+tabelkabledowtree <- as.data.frame(cbind(parametry = c("train, cp .01, ms 5, md 20", "train, cp .02, ms 10, md 20", "train, cp .02, ms 5, md 20, g+a","test, cp .01, ms 5, md 20", "test, cp .02, ms 10, md 20", "test, cp .02, ms 5, md 20, g+a","bootstrap 50, cp .02, ms 5, md 20, g+a", "bootstrap 50, cp .01, ms 5, md 20"),
+                                         bledy = c(acctreetrain1, acctreetrain2, acctreetrain3, acctreetest1, acctreetest2, acctreetest3, error3$error, error4$error)))
+
+tabelkabledowtree$bledy <- as.numeric(tabelkabledowtree$bledy)
+
+tab6 <- xtable(tabelkabledowtree, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji. W pierwszej kolumnie informacje zakodowane: test/train - zbiór testowy/uczący, ms - minsplit, md - maxdepth, g - glucose, a - age, '''' - wszystkie cechy", label = "tabela6")
+
+danetree <- cbind(trainset,ztrain,predtreetrain3[1:ntrain])
+names(danetree)[11] <- "tree"
+
+ggplot(danetree, aes(x=glucose,y=ztrain,col=diabetes,shape=tree)) + geom_point() + ggtitle("Wykres rozrzutu z grupowaniem")
+
+print(tab6, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Ponownie wyniki na zbiorze uczącym odbiegają od tych na zbiorze testowym, czy z wykorzystaniem bootstrapu. Przy odpowiednich parametrach wyniki są porównywalne z tymi osiągniętymi za pomocą k-najbliższych sąsiadów, mając zaletę w postaci większej interpretowalności.  
+Poniżej zaprezentuję kod wykorzystany do znalezienia optymalnej wielkości drzewa:
+
+```{r prezentacja tree, echo=TRUE, dependson=c("dane","tree")}
+# ustalam cp dla najmniejszego błędu kroswalidacyjnego
+
+bestcp1 <- tree1$cptable[which.min(tree1$cptable[,"xerror"]),"CP"]
+val1 <- tree1$cptable[which.min(tree1$cptable[,"xerror"]),"xerror"] +
+  tree1$cptable[which.min(tree1$cptable[,"xerror"]),"xstd"]
+
+# znajduję najmniejsze drzewo zgodnie z regułą 1SE
+
+s1SE1 <- which.min((tree1$cptable[tree1$cptable[,"xerror"] <= val1,])[,"nsplit"])
+valid1 <- as.data.frame(tree1$cptable[tree1$cptable[,"xerror"] <= val1,])
+cp1 <- valid1[which.min(valid1$nsplit),"CP"]
+tree1pruned <- prune(tree1,cp=cp1)
+```
+
+## Naiwny klasyfikator bayesowski
+
+```{r bayes, echo = FALSE, results='asis', fig.cap="Wykres rozrzutu dla danych uczących z wykorzystaniem zmiennych glucose i age, bez wykorzystania jądrowego estymatora gęstości. Grupowanie wg rzeczywistej etykietki i klasyfikacji metodą drzew klasyfikacyjnych"}
+# Naiwny klasyfikator bayesowski
+
+# modele
+
+nbayes1 <- NaiveBayes(model1, trainset, usekernel = TRUE)
+nbayes2 <- NaiveBayes(model1, trainset, usekernel = FALSE)
+nbayes3 <- NaiveBayes(model2, trainset, usekernel = TRUE)
+nbayes4 <- NaiveBayes(model2, trainset, usekernel = FALSE)
+
+# predykcje - zbiór treningowy
+
+prednbayes1train <- predict(nbayes1, newdata=trainset)$class
+prednbayes2train <- predict(nbayes2, newdata=trainset)$class
+prednbayes3train <- predict(nbayes3, newdata=trainset)$class
+prednbayes4train <- predict(nbayes4, newdata=trainset)$class
+
+# predykcje - zbiór testowy
+
+prednbayes1test <- predict(nbayes1, newdata=testset)$class
+prednbayes2test <- predict(nbayes2, newdata=testset)$class
+prednbayes3test <- predict(nbayes3, newdata=testset)$class
+prednbayes4test <- predict(nbayes4, newdata=testset)$class
+
+# Macierze odmienności
+
+confbayes1train <- table(trainset$diabetes,prednbayes1train)
+confbayes2train <- table(trainset$diabetes,prednbayes2train)
+confbayes3train <- table(trainset$diabetes,prednbayes3train)
+confbayes4train <- table(trainset$diabetes,prednbayes4train)
+
+confbayes1test <- table(testset$diabetes,prednbayes1test)
+confbayes2test <- table(testset$diabetes,prednbayes2test)
+confbayes3test <- table(testset$diabetes,prednbayes3test)
+confbayes4test <- table(testset$diabetes,prednbayes4test)
+
+# Błędy klasyfikacji
+
+nbayesacc1train <- (ntrain - sum(diag(confbayes1train)))/ntrain
+nbayesacc2train <- (ntrain - sum(diag(confbayes2train)))/ntrain
+nbayesacc3train <- (ntrain - sum(diag(confbayes3train)))/ntrain
+nbayesacc4train <- (ntrain - sum(diag(confbayes4train)))/ntrain
+
+nbayesacc1test <- (ntest - sum(diag(confbayes1test)))/ntest
+nbayesacc2test <- (ntest - sum(diag(confbayes2test)))/ntest
+nbayesacc3test <- (ntest - sum(diag(confbayes3test)))/ntest
+nbayesacc4test <- (ntest - sum(diag(confbayes4test)))/ntest
+
+my.predict3  <- function(model, newdata) predict(model, newdata=newdata, type="class")$class
+my.bayes <- function(formula1, data1, kernel) NaiveBayes(formula=formula1, data=data1, usekernel = kernel)
+
+error5 <- errorest(model1, dane, model=my.bayes, predict=my.predict3, estimator="cv",   
+         est.para=control.errorest(k = 10), kernel = TRUE)
+error6 <- errorest(model2, dane, model=my.bayes, predict=my.predict3, estimator="cv",   
+         est.para=control.errorest(k = 10), kernel = TRUE)
+error7 <- errorest(model1, dane, model=my.bayes, predict=my.predict3, estimator="cv",   
+         est.para=control.errorest(k = 10), kernel = FALSE)
+error8 <- errorest(model2, dane, model=my.bayes, predict=my.predict3, estimator="cv",   
+         est.para=control.errorest(k = 10), kernel = FALSE)
+
+tabelkabledowbayes <- as.data.frame(cbind(
+  parametry=c("train, kernel","train, no kernel","train, kernel, b + a","train, no kernel, b + a","test, kernel","test, no kernel","test, kernel, b + a","test, no kernel, b + a","crossvalidation, kernel","crossvalidation, kernel, b + a", "crossvalidation, no kernel", "crossvalidation, no kernel, b + a"),
+  bledy = c(nbayesacc1train,nbayesacc2train, nbayesacc3train, nbayesacc4train, nbayesacc1test, nbayesacc2test, nbayesacc3test, nbayesacc4test, error5$error, error6$error, error7$error, error8$error)))
+tabelkabledowbayes$bledy <- as.numeric(tabelkabledowbayes$bledy)
+
+tab7 <- xtable(tabelkabledowbayes, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji. W pierwszej kolumnie informacje zakodowane: test/train - zbiór testowy/uczący, g - glucose, a - age, '''' - wszystkie cechy", label = "tabela7")
+
+danebayes <- cbind(trainset,ztrain,prednbayes4train)
+names(danebayes)[[11]] <- "bayes"
+ggplot(danebayes, aes(x=glucose,y=ztrain, col=diabetes, shape=bayes)) + geom_point() + ggtitle("Wykres rozrzutu z podziałem na grupy")
+
+print(tab7, type = "latex", table.placement = "H", comment=FALSE)
+```
+
+Naiwny klasyfikator bayesowski osiągnął bardzo dobrą dokładność, szczególnie gdy nie korzytaliśmy z jądrowego estymatora gęstości, który oferował lepsze rezultaty na zbiorze uczącym, znacznie pogarszając je na zbiorze testowym. Jednak przy zastosowaniu kroswalidacji wersja z jądrowym estymatorem nie odbiegała tak mocno. Istotnie lepsze rezultaty otrzymywaliśmy konstruując klasyfikator na podstawie zmiennych o dużej zdolności dyskryminacyjnej. 
+
+## Podsumowanie
+
+Poniżej zestawimy błędy wyznaczone przy pomocy zaawansowanych metod - bootstrap i kroswalidacji.
+
+```{r podsumowanie, echo=FALSE, results='asis', dependson=c("bayes","tree","knn")}
+porownanie <- as.data.frame(cbind(metoda = c("KNN k=15 g + a", "KNN k=15 all", "tree cp=0.02 g + a", "tree cp=0.01 all",
+                               "bayes kernel all", "bayes kernel g + a", "bayes all", "bayes g + a"),
+                               error = c(error1$error,error2$error,error3$error,error4$error,
+                                         error5$error,error6$error,error7$error,error8$error)))
+porownanie$error <- as.numeric(porownanie$error)
+
+tab8 <- xtable(porownanie, digits = 3, row.names = F, caption = "Zestawienie błądów klasyfikacji dla różnych metod i parametrów", label = "tabela8")
+print(tab8, type = "latex", table.placement = "H", comment=FALSE)
+
+```
+
+W klasyfikacji analizowanych danych najlepiej sprawdził się naiwny klasyfikator bayesowski. Zarówno w przypadku tego klasyfikatora, jak i drzew klasyfikacyjnych ograniczenie się do zmiennych _glucose_ i _age_ przynosiło lepsze rezultaty. Przy testach dla wielu parametrów, zbiorów i zmiennych zazwyczaj można było wyciągnąć podobne wnioski, jak przy korzystaniu z zaawansowanych metod oceny dokładności. W przypadku metod k-nn, drzew klasyfikacyjnych i naiwnego estymatora bayesowskiego z jądrowym estymatorem gęstości wyniki na zbiorze uczącym i testowym istotnie się różniły, zatem można było przypuszczać, że "prawdziwa dokładność" jest gdzieś pomiędzy. Takie rozumowanie nie sprawdziłoby się jednak w przypadku chociażby naiwnego estymatora bayesowskiego bez jądrowego estymatora gęstości dla zmiennych _glucose_ i _age_.
+
